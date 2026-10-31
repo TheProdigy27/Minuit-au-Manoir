@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:">
+<title>Minuit au Manoir</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Creepster&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="game"></canvas>
+<canvas id="hud"></canvas>
+<div class="fog"></div>
+
+<section id="title" class="screen active">
+  <h1 class="logo">Minuit<span>au manoir</span></h1>
+  <p class="tagline">Les bougies se sont éteintes. Quelque chose s'est réveillé.</p>
+  <div class="panel join">
+    <label for="name">Ton nom</label>
+    <input id="name" maxlength="16" placeholder="Ton pseudo" autocomplete="off" spellcheck="false">
+    <label>Ta couleur</label>
+    <div id="colors" class="colors"></div>
+    <button id="hostBtn" type="button" class="btn big">Créer une partie</button>
+    <p class="or">ou</p>
+    <form id="joinForm" class="join-row" autocomplete="off">
+      <input id="code" maxlength="24" placeholder="Code de la partie" spellcheck="false" aria-label="Code de la partie">
+      <button type="submit" class="btn">Rejoindre</button>
+    </form>
+    <p id="status" class="status" role="status"></p>
+    <button id="cancelBtn" type="button" class="link" hidden>Annuler</button>
+  </div>
+  <div id="steamError" class="panel warn" hidden>
+    <p><b>Steam n'est pas lancé.</b> Le jeu passe par Steam pour relier les joueurs : lancez Steam, connectez-vous, puis réessayez.</p>
+    <p id="steamDetail" class="detail"></p>
+    <button id="retryBtn" type="button" class="btn">Réessayer</button>
+  </div>
+  <p class="hint">🔊 Monte le son, éteins la lumière. <kbd>F11</kbd> : plein écran.</p>
+</section>
+
+<section id="lobby" class="screen">
+  <h2 class="title-small">Le salon</h2>
+  <div class="lobby-grid">
+    <div class="panel">
+      <h3>Joueurs</h3>
+      <ul id="playerList" class="players"></ul>
+      <button id="readyBtn" class="btn big">Je suis prêt·e</button>
+      <p id="countdown" class="countdown"></p>
+      <p id="lobbyNote" class="note"></p>
+      <div class="diff"><span>Difficulté</span><div id="diffBtns" class="chips"></div></div>
+    </div>
+    <div class="panel rules">
+      <h3>Comment survivre</h3>
+      <ul>
+        <li>💀 Trouvez les <b>crânes maudits</b> cachés dans le manoir. Leur lueur verte se voit dans le noir.</li>
+        <li>🚪 Quand ils sont tous réunis, la <b>grande porte du hall</b> s'ouvre : fuyez !</li>
+        <li>👁 La créature voit les <b>lampes allumées</b> de loin et <b>entend</b> ceux qui courent.</li>
+        <li>🔦 Braquez vos lampes sur elle pour la <b>repousser</b> (c'est plus efficace à plusieurs).</li>
+        <li>🌑 Éteignez votre lampe pour <b>vous cacher</b>. Les piles s'usent, ramassez-en.</li>
+        <li>✚ Un ami à terre ? Restez près de lui et <b>maintenez l'action</b> pour le relever.</li>
+        <li>👻 Mort ? Vous devenez un fantôme : laissez des <b>signes</b> pour guider les vivants.</li>
+      </ul>
+      <h3>Commandes</h3>
+      <p class="keys">souris : regarder et viser · ZQSD / WASD : marcher · flèches : avancer et tourner · <kbd>Maj</kbd> courir · <kbd>F</kbd> ou clic droit : lampe · <kbd>E</kbd> ou <kbd>Espace</kbd> : action · <kbd>M</kbd> : plan du manoir</p>
+      <p class="keys"><kbd>F11</kbd> plein écran · <kbd>Échap</kbd> menu (sensibilité de la souris, quitter la partie)</p>
+    </div>
+    <div class="panel invite">
+      <h3>Inviter des amis</h3>
+      <p class="note">Donnez-leur ce code : ils lancent le jeu, le saisissent et cliquent sur «&nbsp;Rejoindre&nbsp;».</p>
+      <p id="codeBox" class="code"></p>
+      <button id="copyBtn" class="btn">Copier le code</button>
+      <button id="inviteBtn" class="btn">Inviter des amis Steam</button>
+      <p class="note">Chaque joueur a besoin de Steam, lancé et connecté.</p>
+      <button id="leaveBtn" type="button" class="link">Quitter le salon</button>
+    </div>
+  </div>
+</section>
+
+<section id="results" class="screen">
+  <h2 id="resTitle" class="logo small"></h2>
+  <p id="resSub" class="tagline"></p>
+  <div id="awards" class="awards"></div>
+  <div class="panel">
+    <table id="resTable" class="results"></table>
+  </div>
+  <button id="backBtn" class="btn big">Retour au salon</button>
+</section>
+
+<div id="menu" class="overlay" hidden>
+  <div class="panel quit">
+    <h3 id="menuTitle">Quitter la partie ?</h3>
+    <p id="menuNote" class="note"></p>
+    <label class="sens">Sensibilité de la souris <input id="sens" type="range" min="0.3" max="3" step="0.1"></label>
+    <div class="quit-btns">
+      <button id="stayBtn" type="button" class="btn">Rester</button>
+      <button id="quitBtn" type="button" class="btn">Quitter</button>
+    </div>
+  </div>
+</div>
+
+<div id="offline" class="offline">Connexion à l'hôte perdue… reconnexion en cours</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

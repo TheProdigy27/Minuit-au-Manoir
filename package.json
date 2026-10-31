@@ -1,0 +1,55 @@
+{
+  "name": "minuit-au-manoir",
+  "productName": "Minuit au Manoir",
+  "version": "3.0.0",
+  "description": "Jeu d'horreur coopératif en ligne via Steam, pour une soirée Halloween",
+  "type": "module",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "dist": "electron-builder --win"
+  },
+  "engines": {
+    "node": ">=22.12"
+  },
+  "dependencies": {
+    "steamworks.js": "0.4.0",
+    "three": "0.170.0"
+  },
+  "devDependencies": {
+    "electron": "44.7.2",
+    "electron-builder": "26.17.0"
+  },
+  "build": {
+    "productName": "Minuit au Manoir",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**",
+      "server/**",
+      "shared/**",
+      "public/**",
+      "!node_modules/steamworks.js/dist/{linux64,osx}/**",
+      "!node_modules/steamworks.js/dist/win64/*.lib",
+      "!node_modules/three/{examples,src}/**",
+      "!node_modules/three/build/{three.cjs,three.module.js,three.webgpu*}"
+    ],
+    "asarUnpack": [
+      "node_modules/steamworks.js/**"
+    ],
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false
+    },
+    "win": {
+      "target": "portable",
+      "icon": "public/icon.png"
+    },
+    "portable": {
+      "artifactName": "Minuit-au-Manoir-${version}.exe"
+    }
+  }
+}
