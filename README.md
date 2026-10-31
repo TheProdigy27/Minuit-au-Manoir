@@ -11,8 +11,11 @@ ordinateur et où qu'il soit. Les joueurs se retrouvent grâce à Steam : aucun 
 - Un PC sous **Windows**.
 - **Steam** installé, lancé et connecté. Un compte gratuit suffit : rien à acheter ni à installer
   dans Steam. Le jeu passe par *Spacewar*, l'application de test que Valve ouvre à tous les comptes.
-- Le fichier **`Minuit-au-Manoir-3.0.0.exe`**, le même pour tout le monde (l'hôte refuse les
-  joueurs qui ont une autre version).
+- Le fichier **`Minuit-au-Manoir-3.0.0.exe`**, à télécharger sur la page
+  [Releases](https://github.com/TheProdigy27/Minuit-au-Manoir/releases/latest). Rien à installer.
+  Tout le monde doit avoir la même version : l'hôte refuse les joueurs qui en ont une autre.
+  Variante : `Minuit-au-Manoir-3.0.0-win.zip`, le même jeu décompressé, qui démarre plus vite.
+  Dézippez-le, puis lancez `Minuit au Manoir.exe` dans le dossier.
 
 ## Lancer une partie
 
