@@ -1,7 +1,7 @@
 {
   "name": "minuit-au-manoir",
   "productName": "Minuit au Manoir",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "description": "Jeu d'horreur coopératif en ligne via Steam, pour une soirée Halloween",
   "type": "module",
   "main": "electron/main.js",
