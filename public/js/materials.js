@@ -14,6 +14,8 @@ export const SETS = {
 const loader = new THREE.ImageLoader();
 const bases = new Map();
 const pending = [];
+let arrived = 0;
+const track = p => pending.push(p.finally(() => arrived++));
 let aniso = 1;
 let env = null, envIntensity = 1;
 let packed = false;
@@ -23,7 +25,7 @@ export function setAnisotropy(a) {
 }
 
 // Photos compressées pour la carte graphique (si elle lit les formats BC1 et BC5, voir bc.js) :
-// décodées et compressées par des workers pendant l'écran titre, 4 à 8 fois moins de mémoire.
+// décodées et compressées par des workers pendant l'écran de chargement, 4 à 8 fois moins de mémoire.
 export function setCompression(on) {
   packed = on;
 }
@@ -73,7 +75,7 @@ function base(set, file) {
       copies.set(t, []);
       // une fois envoyés à la carte graphique (une seule fois pour toutes les copies), les niveaux sont oubliés
       const sent = () => { for (const c of [t, ...copies.get(t)]) c.mipmaps = []; };
-      pending.push(encode(url, file === 'diff' ? 'color' : file === 'nor' ? 'normal' : 'data').then(levels => {
+      track(encode(url, file === 'diff' ? 'color' : file === 'nor' ? 'normal' : 'data').then(levels => {
         t.image.width = levels[0].width;
         t.image.height = levels[0].height;
         for (const c of [t, ...copies.get(t)]) {
@@ -84,7 +86,7 @@ function base(set, file) {
       }, err => console.warn(key, err)));
     } else {
       t = new THREE.Texture();
-      pending.push(new Promise(ok => loader.load(url, img => {
+      track(new Promise(ok => loader.load(url, img => {
         t.image = img;
         t.needsUpdate = true;
         ok();
@@ -98,7 +100,12 @@ function base(set, file) {
   return t;
 }
 
-// Toutes les photos chargées (elles se chargent pendant l'écran titre).
+// Part des photos arrivées, de 0 à 1 (barre de l'écran de chargement).
+export function texturesLoaded() {
+  return pending.length ? arrived / pending.length : 0;
+}
+
+// Toutes les photos chargées (elles se chargent pendant l'écran de chargement).
 export function texturesReady() {
   for (const set of Object.keys(SETS)) for (const f of ['diff', 'nor', 'arm']) base(set, f);
   return Promise.all(pending).then(() => {

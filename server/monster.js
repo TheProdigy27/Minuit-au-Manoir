@@ -1,7 +1,7 @@
 // La créature : elle erre, entend les bruits, voit les lampes allumées, poursuit,
 // et recule quand on lui braque assez longtemps de la lumière dessus.
 import { CFG, batteryFactor } from '../shared/config.js';
-import { moveBox, lineOfSight, clearPath, angDiff, solidAt, distanceField } from '../shared/physics.js';
+import { moveBox, lineOfSight, clearPath, angDiff, solidAt, distanceField, floorAt, crossStairs, levelDist, stairLinks, linksOf } from '../shared/physics.js';
 import { cellOf } from '../shared/map.js';
 
 const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
@@ -9,12 +9,13 @@ const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -
 const canStep = (map, cx, cy, dx, dy) =>
   !solidAt(map, cx + dx, cy + dy) && !(dx && dy && (solidAt(map, cx + dx, cy) || solidAt(map, cx, cy + dy)));
 
-// Plus court chemin entre deux cases (parcours en largeur, 8 directions, sans couper les coins).
+// Plus court chemin entre deux cases (parcours en largeur, 8 directions, sans couper les coins, escaliers compris).
 export function findPath(map, sx, sy, gx, gy) {
   const { w, h } = map;
   if (gx < 0 || gy < 0 || gx >= w || gy >= h || solidAt(map, gx, gy)) return null;
   const start = sy * w + sx, goal = gy * w + gx;
   if (start === goal) return [];
+  const links = stairLinks(map);
   const prev = new Int32Array(w * h).fill(-1);
   const queue = new Int32Array(w * h);
   let head = 0, tail = 0;
@@ -27,6 +28,11 @@ export function findPath(map, sx, sy, gx, gy) {
     for (const [dx, dy] of DIRS) {
       if (!canStep(map, cx, cy, dx, dy)) continue;
       const ni = (cy + dy) * w + cx + dx;
+      if (prev[ni] !== -1) continue;
+      prev[ni] = cur;
+      queue[tail++] = ni;
+    }
+    for (const ni of linksOf(links, cur)) {
       if (prev[ni] !== -1) continue;
       prev[ni] = cur;
       queue[tail++] = ni;
@@ -89,7 +95,7 @@ export class Monster {
     if (alive.length && Math.random() < 0.55) {
       const p = alive[Math.floor(Math.random() * alive.length)];
       const pc = cellOf(map, p.x, p.y);
-      const near = map.cells.filter(c => Math.abs(c.c - pc.c) + Math.abs(c.r - pc.r) <= 1);
+      const near = map.cells.filter(c => c.f === pc.f && Math.abs(c.c - pc.c) + Math.abs(c.r - pc.r) <= 1);
       cell = near[Math.floor(Math.random() * near.length)];
     } else {
       cell = map.cells[Math.floor(Math.random() * map.cells.length)];
@@ -220,10 +226,10 @@ export class Monster {
       this.goTo(map, this.lastSeen.x, this.lastSeen.y);
       return;
     }
-    // Bruits : courir, ramasser un crâne, relever un ami…
+    // Bruits : courir, ramasser un crâne, relever un ami… (les plus forts s'entendent d'un étage à l'autre)
     let best = null, score = 0;
     for (const n of g.noises) {
-      const d = Math.hypot(n.x - this.x, n.y - this.y);
+      const d = levelDist(map, this.x, this.y, n.x, n.y);
       const r = n.loud || lineOfSight(map, this.x, this.y, n.x, n.y) ? n.r : n.r * 0.6;
       if (d < r && r - d > score) { best = n; score = r - d; }
     }
@@ -242,13 +248,14 @@ export class Monster {
     while (this.path.length >= 2 && clearPath(map, this.x, this.y, this.path[1][0], this.path[1][1], half)) this.path.shift();
     let rem = speed * dt;
     for (let guard = 0; guard < 4 && rem > 1e-4 && this.path.length; guard++) {
-      const [tx, ty] = this.path[0];
+      // étape suivante à l'étage d'à côté : on monte (ou descend) l'escalier vers le même endroit
+      const tx = this.path[0][0] - (floorAt(map, this.path[0][0]) - floorAt(map, this.x)) * map.stride, ty = this.path[0][1];
       const dx = tx - this.x, dy = ty - this.y, d = Math.hypot(dx, dy);
       if (d < 0.05) { this.path.shift(); continue; }
       const step = Math.min(rem, d);
       const [nx, ny] = moveBox(map, this.x, this.y, (dx / d) * step, (dy / d) * step, half);
       const moved = Math.hypot(nx - this.x, ny - this.y);
-      this.x = nx; this.y = ny;
+      [this.x, this.y] = crossStairs(map, nx, ny);
       rem -= step;
       this.turnTo(Math.atan2(dy, dx), dt);
       if (moved < step * 0.25) {

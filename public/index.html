@@ -15,7 +15,16 @@
 <canvas id="hud"></canvas>
 <div class="fog"></div>
 
-<section id="title" class="screen active">
+<section id="loading" class="screen active">
+  <h1 class="logo">Minuit<span>au manoir</span></h1>
+  <div class="loading" role="status">
+    <p id="loadText">Chargement…</p>
+    <progress id="loadBar" max="1" value="0"></progress>
+    <p class="note">Le premier lancement est le plus long.</p>
+  </div>
+</section>
+
+<section id="title" class="screen">
   <h1 class="logo">Minuit<span>au manoir</span></h1>
   <p class="tagline">Les bougies se sont éteintes. Quelque chose s'est réveillé.</p>
   <div class="panel join">
@@ -63,7 +72,7 @@
     <div class="panel rules">
       <h3>Comment survivre</h3>
       <ul>
-        <li>💀 Trouvez les <b>crânes maudits</b> cachés dans le manoir. Leur lueur verte se voit dans le noir.</li>
+        <li>💀 Trouvez les <b>crânes maudits</b> cachés dans le manoir, à <b>tous les étages</b>. Leur lueur verte se voit dans le noir.</li>
         <li>🚪 Quand ils sont tous réunis, la <b>grande porte du hall</b> s'ouvre : fuyez !</li>
         <li>👁 La créature voit les <b>lampes allumées</b> de loin et <b>entend</b> ceux qui courent.</li>
         <li>🔦 Braquez vos lampes sur elle pour la <b>repousser</b> (c'est plus efficace à plusieurs).</li>
@@ -72,7 +81,7 @@
         <li>👻 Mort ? Vous devenez un fantôme : laissez des <b>signes</b> pour guider les vivants.</li>
       </ul>
       <h3>Commandes</h3>
-      <p class="keys">souris : regarder et viser · ZQSD / WASD : marcher · flèches : avancer et tourner · <kbd>Maj</kbd> courir · <kbd>F</kbd> ou clic droit : lampe · <kbd>E</kbd> ou <kbd>Espace</kbd> : action · <kbd>M</kbd> : plan du manoir</p>
+      <p class="keys">souris : regarder et viser · ZQSD / WASD : marcher · flèches : avancer et tourner · <kbd>Maj</kbd> courir · <kbd>F</kbd> ou clic droit : lampe · <kbd>E</kbd> ou <kbd>Espace</kbd> : action · <kbd>Tab</kbd> : plan du manoir</p>
       <p class="keys"><kbd>F11</kbd> plein écran · <kbd>Échap</kbd> menu (options, quitter la partie)</p>
     </div>
     <div class="panel invite">

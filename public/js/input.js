@@ -1,6 +1,6 @@
 // Clavier + souris. Pendant la partie, la souris est capturée : elle sert à regarder autour de soi.
 // `event.code` désigne la position physique des touches : ZQSD en AZERTY = WASD en QWERTY.
-const GAME_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyE', 'KeyF', 'KeyM', 'Semicolon', 'ShiftLeft', 'ShiftRight', 'Tab']);
+const GAME_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyE', 'KeyF', 'ShiftLeft', 'ShiftRight', 'Tab']);
 
 export class Input {
   constructor(el) {
@@ -65,8 +65,8 @@ export class Input {
       act: k.has('KeyE') || k.has('Space'),
       actPressed: this.pressed.has('KeyE') || this.pressed.has('Space'),
       toggleLight: this.pressed.has('KeyF') || this.flags.light,
-      next: this.flags.click || this.pressed.has('Tab'),
-      plan: k.has('KeyM') || k.has('Semicolon'),
+      next: this.flags.click,
+      plan: k.has('Tab'),
     };
   }
 

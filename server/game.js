@@ -40,7 +40,7 @@ export class Game {
       .map(c => {
         const spots = map.spots[c.id].slice();
         const d = spots.reduce((s, [x, y]) => s + Math.max(0, dist[y * map.w + x]), 0) / spots.length;
-        return { spots, d };
+        return { spots, d, f: c.f };
       })
       .sort((a, b) => b.d - a.d);
     const takeSpot = list => {
@@ -51,22 +51,27 @@ export class Game {
     };
     let id = 1;
 
-    // Crânes : un par pièce, dans les pièces les plus éloignées du hall
+    // Crânes : un par pièce, dans les pièces les plus éloignées du hall, pris à tour de rôle sur
+    // chaque étage (il faut tous les visiter)
     this.skullsTotal = 4 + Math.floor(n / 3) + this.diff.skulls;
-    const far = shuffle(rooms.slice(0, Math.max(this.skullsTotal, Math.ceil(rooms.length * 0.75))));
+    const far = rooms.slice(0, Math.max(this.skullsTotal, Math.ceil(rooms.length * 0.75)));
+    const byFloor = shuffle(map.floors.map((_, f) => shuffle(far.filter(r => r.f === f))));
+    const order = [];
+    for (let i = 0; order.length < far.length; i++) for (const list of byFloor) if (list[i]) order.push(list[i]);
     for (let i = 0; i < this.skullsTotal; i++) {
-      const [x, y] = takeSpot([far[i % far.length], ...far]);
+      const [x, y] = takeSpot([order[i % order.length], ...order]);
       this.items.push({ id: id++, type: 'skull', x, y, taken: false });
     }
     // Piles pour les lampes, n'importe où
-    for (let i = 0; i < 5 + 2 * n; i++) {
+    for (let i = 0; i < 4 + 2 * n + 3 * map.floors.length; i++) {
       const [x, y] = takeSpot([rooms[Math.floor(Math.random() * rooms.length)], ...rooms]);
       this.items.push({ id: id++, type: 'battery', x, y, taken: false });
     }
-    // Créatures, dans les pièces les plus lointaines
-    const count = (n >= 5 ? 2 : 1) + this.diff.monsters;
+    // Créatures, chacune dans la pièce la plus lointaine d'un étage différent
+    const lairs = map.floors.map((_, f) => rooms.find(r => r.f === f)).filter(Boolean).sort((a, b) => b.d - a.d);
+    const count = (n >= 3 ? 2 : 1) + this.diff.monsters;
     for (let i = 0; i < count; i++) {
-      const [x, y] = takeSpot([rooms[i % Math.min(3, rooms.length)], ...rooms]);
+      const [x, y] = takeSpot([lairs[i % lairs.length], ...rooms]);
       this.monsters.push(new Monster(i, x, y));
     }
     // Joueurs, groupés au centre du hall

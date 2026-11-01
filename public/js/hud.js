@@ -1,6 +1,7 @@
 // Interface dessinée par-dessus la vue 3D : crânes, équipe, lampe, messages, repères vers les amis
 // à terre et la sortie, plan du manoir, et l'apparition de la créature quand elle vous attrape.
 import { CFG } from '/shared/config.js';
+import { floorAt, levelDist } from '/shared/physics.js';
 import { TAU, FONT, TITLE, circle } from './art.js';
 
 function text(c, str, x, y, size, color, align = 'left', font = FONT) {
@@ -47,7 +48,7 @@ export class Hud {
     this.cv = canvas;
     this.ctx = canvas.getContext('2d');
     this.map = null;
-    this.plan = null;
+    this.plans = null;
   }
 
   resize() {
@@ -57,15 +58,25 @@ export class Hud {
     this.u = Math.max(Math.min(w, h) / 700, dpr * 0.9);
   }
 
-  // Le plan est teinté une fois pour toutes (un filtre à chaque image, touche M maintenue, coûtait cher).
-  setMap(map, plan) {
+  // Les plans des étages sont teintés une fois pour toutes (un filtre à chaque image, touche Tab
+  // maintenue, coûtait cher).
+  setMap(map, plans) {
     this.map = map;
-    const cv = (this.plan = document.createElement('canvas'));
-    cv.width = plan.width;
-    cv.height = plan.height;
-    const c = cv.getContext('2d');
-    c.filter = 'sepia(0.55) brightness(0.85)';
-    c.drawImage(plan, 0, 0);
+    this.plans = plans.map(plan => {
+      const cv = document.createElement('canvas');
+      cv.width = plan.width;
+      cv.height = plan.height;
+      const c = cv.getContext('2d');
+      c.filter = 'sepia(0.55) brightness(0.85)';
+      c.drawImage(plan, 0, 0);
+      return cv;
+    });
+  }
+
+  // « Premier étage » quand un point est à un autre étage que celui qu'on regarde, rien sinon.
+  floorTag(G, x) {
+    const f = floorAt(this.map, x);
+    return f === floorAt(this.map, G.view.x) ? '' : this.map.floors[f].name;
   }
 
   draw(G, view) {
@@ -132,7 +143,7 @@ export class Hud {
         text(c, p.name, s.x, s.y, 12 * u, p.state === 'dead' ? `rgba(190,210,255,${a})` : `rgba(232,220,200,${a})`, 'center');
       } else if (p.state === 'down') {
         const pulse = 0.6 + 0.4 * Math.sin(t * 6);
-        const label = `${p.name} · ${p.downT} s · ${Math.round(d)} m`;
+        const label = `${p.name} · ${p.downT} s · ${this.floorTag(G, p.x) || Math.round(d) + ' m'}`;
         if (active) this.marker(view, p.x, p.y, 0.7, `rgba(255,70,60,${pulse})`, '✚', label, p.revive);
         else {
           const s = view.project(p.x, p.y, 0.7, this.w, this.h);
@@ -141,8 +152,8 @@ export class Hud {
       }
     }
     if (G.exitOpen && me && (me.state === 'alive' || me.state === 'down')) {
-      const ex = G.map.exit;
-      this.marker(view, ex.x + ex.w / 2, ex.y + 0.5, 1.4, 'rgba(140,255,160,0.95)', '🚪', `SORTIE · ${Math.round(Math.hypot(ex.x + 1 - eye.x, ex.y - eye.y))} m`);
+      const ex = G.map.exit, where = this.floorTag(G, ex.x) || `${Math.round(levelDist(G.map, eye.x, eye.y, ex.x + 1, ex.y))} m`;
+      this.marker(view, ex.x + ex.w / 2, ex.y + 0.5, 1.4, 'rgba(140,255,160,0.95)', '🚪', `SORTIE · ${where}`);
     }
     for (const p of G.pings) this.marker(view, p.x, p.y, 1.4, `rgba(170,200,255,${Math.min(1, p.t / 2) * 0.85})`, '👻', '');
   }
@@ -219,7 +230,7 @@ export class Hud {
         else if (me.battery <= 0) hint = 'Votre lampe est morte… trouvez des piles !';
         else if (!G.local.light) hint = 'Lampe éteinte : la créature vous voit moins (F pour rallumer)';
         else if (me.battery < 20) hint = 'Les piles faiblissent…';
-        else if (G.time < 14) hint = 'Souris : regarder · ZQSD : se déplacer · Maj : courir · M : plan du manoir';
+        else if (G.time < 14) hint = 'Souris : regarder · ZQSD : se déplacer · Maj : courir · Tab : plan du manoir';
       } else if (me.state === 'down') hint = `Vous êtes à terre ! Rampez vers vos amis, ils peuvent vous relever (${me.downT} s)`;
       else if (me.state === 'dead') hint = 'Vous êtes un fantôme. E : laisser un signe aux vivants';
       else if (me.state === 'escaped') hint = G.spectating ? `Vous avez fui le manoir ! Vous suivez ${G.spectating.name} · clic pour changer` : 'Vous avez fui le manoir !';
@@ -227,30 +238,51 @@ export class Hud {
     if (hint) text(c, hint, w / 2, h - 28 * u, 17 * u, 'rgba(240,228,205,0.92)', 'center');
   }
 
-  // Plan du manoir (touche M maintenue) : les pièces, vous et vos amis. Ni la créature ni les crânes.
+  // Plan de l'étage où l'on est (touche Tab maintenue) : les pièces, les escaliers et où ils mènent,
+  // vous et vos amis (ceux des autres étages sont nommés dessous). Ni la créature ni les crânes.
   drawPlan(G) {
-    const c = this.ctx, u = this.u, w = this.w, h = this.h, map = this.map, plan = this.plan;
-    if (!plan) return;
+    const c = this.ctx, u = this.u, w = this.w, h = this.h, map = this.map;
+    if (!this.plans) return;
+    const f = floorAt(map, G.view.x), plan = this.plans[f], ox = map.floors[f].ox;
     c.fillStyle = 'rgba(5,3,6,0.85)';
     c.fillRect(0, 0, w, h);
-    const s = Math.min((w * 0.9) / map.w, (h * 0.78) / map.h);
-    const x0 = (w - map.w * s) / 2, y0 = (h - map.h * s) / 2 + 14 * u;
-    c.drawImage(plan, x0, y0, map.w * s, map.h * s);
+    const s = Math.min((w * 0.9) / map.fw, (h * 0.72) / map.h);
+    const x0 = (w - map.fw * s) / 2, y0 = (h - map.h * s) / 2 + 22 * u;
+    c.drawImage(plan, x0, y0, map.fw * s, map.h * s);
     c.strokeStyle = 'rgba(232,220,200,0.35)';
     c.lineWidth = 2 * u;
-    c.strokeRect(x0, y0, map.w * s, map.h * s);
-    text(c, 'Plan du manoir', w / 2, y0 - 26 * u, 28 * u, 'rgba(255,225,190,0.95)', 'center', TITLE);
-    const P = (x, y) => [x0 + x * s, y0 + y * s];
-    const ex = map.exit, [exX, exY] = P(ex.x + ex.w / 2, ex.y + 0.5);
-    text(c, G.exitOpen ? '🚪 SORTIE' : '🚪', exX, exY + 4 * u, 14 * u, G.exitOpen ? 'rgba(140,255,160,1)' : 'rgba(200,170,255,0.9)', 'center');
+    c.strokeRect(x0, y0, map.fw * s, map.h * s);
+    text(c, `Plan du manoir · ${map.floors[f].name}`, w / 2, y0 - 46 * u, 28 * u, 'rgba(255,225,190,0.95)', 'center', TITLE);
+    // les étages, du bas vers le haut, celui-ci en clair
+    c.font = `${Math.round(14 * u)}px ${FONT}`;
+    const names = map.floors.map(fl => fl.name), gap = 26 * u;
+    let tx = w / 2 - (names.reduce((sum, n) => sum + c.measureText(n).width, 0) + gap * (names.length - 1)) / 2;
+    names.forEach((n, i) => {
+      const nw = c.measureText(n).width;
+      text(c, n, tx + nw / 2, y0 - 18 * u, 14 * u, i === f ? 'rgba(255,225,190,0.95)' : 'rgba(200,190,175,0.45)', 'center');
+      tx += nw + gap;
+    });
+    const P = (x, y) => [x0 + (x - ox) * s, y0 + y * s];
+    for (const st of map.stairs) {
+      if (st.f !== f && st.f + 1 !== f) continue;
+      const up = st.f === f, [sx, sy] = P(ox + st.x + st.len / 2, st.y + st.wid / 2);
+      text(c, `${up ? '▲' : '▼'} ${map.floors[up ? f + 1 : f - 1].name}`, sx, sy, 12 * u, 'rgba(255,225,150,0.95)', 'center');
+    }
+    if (f === map.ground) {
+      const ex = map.exit, [exX, exY] = P(ex.x + ex.w / 2, ex.y + 0.5);
+      text(c, G.exitOpen ? '🚪 SORTIE' : '🚪', exX, exY + 4 * u, 14 * u, G.exitOpen ? 'rgba(140,255,160,1)' : 'rgba(200,170,255,0.9)', 'center');
+    }
+    const elsewhere = [];
     for (const id of G.order) {
       const p = G.players.get(id);
       if (!p || p === G.me || (p.state !== 'alive' && p.state !== 'down')) continue;
+      if (floorAt(map, p.x) !== f) { elsewhere.push(`${p.state === 'down' ? '✚ ' : ''}${p.name} (${map.floors[floorAt(map, p.x)].short})`); continue; }
       const [px, py] = P(p.x, p.y);
       if (p.state === 'down') text(c, '✚', px, py, 18 * u, 'rgba(255,70,60,1)', 'center');
       else circle(c, px, py, 5 * u, p.color);
       text(c, p.name, px, py - 13 * u, 11 * u, 'rgba(232,220,200,0.9)', 'center');
     }
+    if (elsewhere.length) text(c, `Ailleurs : ${elsewhere.join(' · ')}`, w / 2, y0 + map.h * s + 24 * u, 14 * u, 'rgba(232,220,200,0.8)', 'center');
     const me = G.me;
     if (me && me.state !== 'escaped') {
       const L = G.local, [px, py] = P(L.x, L.y);

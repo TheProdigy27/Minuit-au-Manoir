@@ -1,6 +1,6 @@
 // Côté page : écrans, réseau (relayé par l'application, via Steam), déplacement du joueur local et boucle de rendu.
 import { CFG, COLORS, DIFFICULTY, PLAYER_STATES } from '/shared/config.js';
-import { moveBox, angDiff } from '/shared/physics.js';
+import { moveBox, angDiff, crossStairs, floorAt, levelDist } from '/shared/physics.js';
 import { Renderer } from './render.js';
 import { Input } from './input.js';
 import { Sound } from './audio.js';
@@ -48,10 +48,31 @@ function show(id) {
   if (id === 'game') document.activeElement?.blur();
   else input.unlock();
 }
-show('title');
+show('loading');
 // La musique des menus démarre dès le choix du pseudo (l'application autorise le son sans clic).
 sound.init();
 sound.music(true);
+
+// Écran de chargement : les photos des matières et un manoir d'essai dont tous les shaders sont compilés
+// (voir Renderer.warmUp) ; les parties démarrent ensuite sans attendre la carte graphique.
+// Part de la barre de chaque étape : à peu près sa durée sur une petite carte graphique, entre premier
+// lancement et suivants (le reste : l'image d'essai). Le texte montre la première étape pas encore finie.
+const LOAD = [
+  ['manor', 0.35, 'Construction du manoir…'],
+  ['shaders', 0.3, 'Compilation des shaders…'],
+  ['textures', 0.1, 'Chargement des textures…'],
+  ['image', 0.15, 'Dernières préparations…'],
+];
+const warm = renderer.warmUp(done => {
+  const v = LOAD.reduce((sum, [step, part]) => sum + part * done[step], 0);
+  const [, , text] = LOAD.find(([step]) => done[step] < 1) ?? LOAD.at(-1);
+  $('#loadText').textContent = `${text} ${Math.round(v * 100)} %`;
+  $('#loadBar').value = v;
+}).catch(err => console.error(err));
+warm.then(() => {
+  if (G.screen === 'loading') show(G.myId ? 'lobby' : 'title'); // fenêtre de test : déjà reliée au salon
+  if (invite) acceptInvite(invite);
+});
 
 let chosenColor = store.get('mam-color');
 if (!COLORS.includes(chosenColor)) chosenColor = COLORS[Math.floor(Math.random() * COLORS.length)];
@@ -249,7 +270,7 @@ function openMenu() {
       : 'Vous hébergez la partie : la quitter la fermera.');
   $('#stayBtn').textContent = inGame ? 'Reprendre' : 'Rester';
   $('#quitBtn').textContent = inGame ? 'Quitter la partie' : 'Quitter le salon';
-  optionsOnly = G.screen === 'title';
+  optionsOnly = G.screen === 'title' || G.screen === 'loading';
   showUpdate();
   menu.hidden = false;
   menuOpenedAt = performance.now();
@@ -405,12 +426,18 @@ mam.on('message', data => {
   onMessage(m);
 });
 
-// Invitation Steam acceptée pendant que le jeu tourne
+// Invitation Steam acceptée pendant que le jeu tourne (pendant le chargement : suivie à l'écran titre)
+let invite = '';
 mam.on('join-request', code => {
+  if (G.screen === 'loading') invite = code;
+  else acceptInvite(code);
+});
+
+function acceptInvite(code) {
   if (G.screen !== 'title' || busy) return;
   $('#code').value = code;
   $('#joinForm').requestSubmit();
-});
+}
 
 // `unreliable` : message d'état, le suivant le remplace s'il se perd en route.
 function send(m, unreliable = false) {
@@ -477,12 +504,12 @@ async function startGame(m) {
   G.fear = G.flash = G.shake = G.jumpscare = 0;
   G.spectating = null;
   Object.assign(G.view, { x: map.spawn.x, y: map.spawn.y, a: -Math.PI / 2, p: 0, who: null });
-  // Construction du manoir et compilation de ses shaders, le salon restant affiché : la créature dort
-  // encore, et le jeu ne se fige plus ensuite à chaque nouveauté.
+  // Construction du manoir et image d'essai, le salon restant affiché : la créature dort encore, et le
+  // jeu ne se fige plus ensuite à chaque nouveauté (shaders compilés pendant l'écran de chargement).
   const token = ++loading, t0 = performance.now();
   $('#countdown').textContent = 'Le manoir se prépare…';
   renderLobby();
-  await nextPaint();
+  await Promise.all([warm, nextPaint()]);
   if (token !== loading || G.map !== map) return;
   renderer.setMap(map);
   await renderer.prepare(G).catch(err => console.error(err));
@@ -536,15 +563,16 @@ function say(text, kind = '') {
   if (G.messages.length > 5) G.messages.shift();
 }
 
-// Stéréo d'un son selon qu'il vient de la gauche ou de la droite du regard
+// Stéréo d'un son selon qu'il vient de la gauche ou de la droite du regard (à un autre étage : du même
+// endroit du manoir, au-dessus ou en dessous)
 function pan(x, y) {
-  const v = G.view, dx = x - v.x, dy = y - v.y;
+  const v = G.view, dx = x - v.x - (floorAt(G.map, x) - floorAt(G.map, v.x)) * G.map.stride, dy = y - v.y;
   return clamp((dy * Math.cos(v.a) - dx * Math.sin(v.a)) / Math.max(Math.hypot(dx, dy), 1.5), -1, 1);
 }
 
 // Volume et stéréo d'un son selon sa position par rapport à celui qui l'entend
 function spatial(x, y, base = 1) {
-  const d = Math.hypot(x - G.view.x, y - G.view.y);
+  const d = levelDist(G.map, G.view.x, G.view.y, x, y);
   return [pan(x, y), base * Math.max(0.12, 1 - d / 28)];
 }
 
@@ -729,11 +757,14 @@ function updateLocal(dt, inp) {
   if (moving) {
     const dx = mx * speed * dt, dy = my * speed * dt;
     if (me.state === 'dead') {
-      L.x = clamp(L.x + dx, 0.5, G.map.w - 0.5);
+      // un fantôme traverse les murs, mais reste à son étage (il en change par les escaliers)
+      const ox = G.map.floors[floorAt(G.map, L.x)].ox;
+      L.x = clamp(L.x + dx, ox + 0.5, ox + G.map.fw - 0.5);
       L.y = clamp(L.y + dy, 0.5, G.map.h - 0.5);
     } else {
       [L.x, L.y] = moveBox(G.map, L.x, L.y, dx, dy, CFG.player.half, G.exitOpen);
     }
+    [L.x, L.y] = crossStairs(G.map, L.x, L.y);
   }
   if (moving) L.bob += speed * dt;
   if (inp.toggleLight && me.state === 'alive') { L.light = !L.light; sound.click(); }
@@ -788,7 +819,7 @@ function updateWorld(dt) {
   }
   const roomAt = (x, y) => {
     const r = map.roomIdx[Math.floor(y) * map.w + Math.floor(x)];
-    return r >= 0 ? map.rooms[r].name : null;
+    return r >= 0 ? `${map.rooms[r].name} · ${map.floors[map.rooms[r].f].short}` : null;
   };
   for (const p of G.players.values()) { const r = roomAt(p.x, p.y); if (r) p.room = r; }
   const fr = roomAt(v.x, v.y);
@@ -815,7 +846,7 @@ function updateWorld(dt) {
   let fear = 0;
   for (const m of G.monsters) {
     if (m.state === 0) continue;
-    const d = Math.hypot(m.x - v.x, m.y - v.y);
+    const d = levelDist(map, v.x, v.y, m.x, m.y);
     let k = Math.max(0, 1 - d / 11);
     if (m.state === 4) k = Math.min(1, k * 1.3 + (d < 14 ? 0.12 : 0));
     fear = Math.max(fear, k);
@@ -827,7 +858,7 @@ function updateWorld(dt) {
     fear: G.fear,
     ghost: me?.state === 'dead',
     monsters: G.monsters.map(m => {
-      const d = Math.hypot(m.x - v.x, m.y - v.y);
+      const d = levelDist(map, v.x, v.y, m.x, m.y);
       return { pan: pan(m.x, m.y), chase: m.state === 4, vol: m.state === 0 ? 0 : Math.max(0, 1 - d / 13) ** 2 * (m.state === 4 ? 0.55 : 0.28) };
     }),
   });

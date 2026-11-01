@@ -122,9 +122,13 @@ body.menu .fog { opacity: 1; }
 
 .update { width: min(400px, 100%); display: flex; flex-direction: column; align-items: center; gap: 10px; border-color: rgba(125, 255, 154, 0.35); text-align: center; }
 .update p { margin: 0; font-size: 16px; line-height: 1.4; }
-.update progress { appearance: none; width: 100%; height: 6px; border: none; border-radius: 3px; overflow: hidden; background: rgba(255, 255, 255, 0.08); }
-.update progress::-webkit-progress-bar { background: rgba(255, 255, 255, 0.08); }
-.update progress::-webkit-progress-value { background: var(--red); transition: width 0.3s; }
+.update progress, .loading progress { appearance: none; width: 100%; height: 6px; border: none; border-radius: 3px; overflow: hidden; background: rgba(255, 255, 255, 0.08); }
+.update progress::-webkit-progress-bar, .loading progress::-webkit-progress-bar { background: rgba(255, 255, 255, 0.08); }
+.update progress::-webkit-progress-value, .loading progress::-webkit-progress-value { background: var(--red); transition: width 0.3s; }
+.loading { width: min(400px, 100%); display: flex; flex-direction: column; align-items: center; gap: 12px; margin-top: 28px; text-align: center; }
+.loading p { margin: 0; font-size: 18px; font-style: italic; color: var(--dim); font-variant-numeric: tabular-nums; }
+.loading .note { font-size: 14px; font-style: normal; }
+.loading progress { height: 8px; box-shadow: 0 0 18px rgba(196, 21, 42, 0.25); }
 .update-info { margin: 0; color: var(--ink); line-height: 1.4; }
 .update-info:empty { display: none; }
 .setting .btn { align-self: center; font-size: 16px; padding: 8px 16px; }

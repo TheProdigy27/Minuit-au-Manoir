@@ -678,6 +678,23 @@ function drawExitDoor(c, ex) {
   c.fillRect(x + w / 2 - 1, y + 4, 2, h - 8);
 }
 
+// Escalier vu de dessus : marches de plus en plus claires vers le haut. Sur l'étage du dessus, sa
+// moitié basse est la trémie, plongée dans le noir.
+function drawStairs(c, s) {
+  const S = TS, n = 16, step = (s.len * S) / n, y = s.y * S, h = s.wid * S;
+  for (let i = 0; i < n; i++) {
+    const x = s.dx > 0 ? s.x * S + i * step : (s.x + s.len) * S - (i + 1) * step;
+    const hole = !s.up && i < n / 2;
+    c.fillStyle = hole ? '#07060a' : shade('#5a3c26', -0.45 + (0.7 * i) / n);
+    c.fillRect(x, y, step, h);
+    if (hole) continue;
+    c.fillStyle = 'rgba(0,0,0,0.5)';
+    c.fillRect(s.dx > 0 ? x : x + step - 2, y, 2, h);
+    c.fillStyle = 'rgba(110,20,30,0.75)'; // tapis
+    c.fillRect(x, y + h * 0.19, step, h * 0.62);
+  }
+}
+
 // Teinte moyenne de deux couleurs.
 export function blend(a, b) {
   const p = s => parseInt(s.slice(1), 16), x = p(a), y = p(b);
@@ -731,7 +748,8 @@ export function buildPlan(map, k = 1, flat = false) {
     for (let x = 0; x < map.w; x++) if (tileAt(map, x, y) === TILE.WALL) drawWall(c, map, x, y, theme(x, y + 1));
   }
   for (const f of map.furniture) drawFurniture(c, f, rnd);
-  drawExitDoor(c, map.exit);
+  for (const s of map.stairs) drawStairs(c, s);
+  if (map.exit) drawExitDoor(c, map.exit);
   return cv;
 }
 

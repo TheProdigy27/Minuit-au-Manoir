@@ -1,10 +1,10 @@
 // Réglages partagés par le serveur et les navigateurs.
 // Distances en cases (tuiles), durées en secondes, vitesses en cases par seconde.
 
-export const TILE = { VOID: 0, FLOOR: 1, WALL: 2, LOW: 3, TALL: 4, EXIT: 5 };
+export const TILE = { VOID: 0, FLOOR: 1, WALL: 2, LOW: 3, TALL: 4, EXIT: 5, STAIR: 6 };
 // Par type de case : bloque le passage / bloque la lumière et la vue.
-export const SOLID = [true, false, true, true, true, true];
-export const OPAQUE = [true, false, true, false, true, true];
+export const SOLID = [true, false, true, true, true, true, false];
+export const OPAQUE = [true, false, true, false, true, true, false];
 
 export const CFG = {
   tickRate: 30,

@@ -44,7 +44,8 @@ affichent la version installée, et **« Rechercher une mise à jour »** interr
 3. **Les autres** saisissent ce code et cliquent sur **« Rejoindre »**. Accepter une invitation
    Steam pendant que le jeu est ouvert fait la même chose.
 4. Chacun clique sur **« Je suis prêt·e »**. La partie démarre quand tout le monde est prêt. Une
-   nouvelle carte du manoir est générée à chaque partie.
+   nouvelle carte du manoir est générée à chaque partie : un rez-de-chaussée et un premier étage,
+   plus un sous-sol à partir de 3 joueurs, et des étages plus vastes à partir de 5.
 
 La partie tourne chez l'hôte : s'il quitte, elle s'arrête pour tout le monde. Choisissez de
 préférence celui qui a la meilleure connexion.
@@ -54,11 +55,13 @@ Pendant la partie, Steam affiche « En jeu : Spacewar » pour tous les joueurs :
 ## Règles
 
 - 💀 Trouvez les **crânes maudits** cachés dans les pièces (il y en a 4 à 7 selon le nombre de
-  joueurs). Leur lueur verte se voit de loin.
+  joueurs), répartis sur **tous les étages**. Leur lueur verte se voit de loin.
+- 🪜 Les étages sont reliés par des **escaliers** (deux entre chaque étage et le suivant).
 - 🚪 Quand ils sont tous trouvés, la **grande porte du hall** s'ouvre : sortez !
-- 👁 La créature dort pendant 15 secondes, puis elle chasse. Elle **voit les lampes allumées de
-  loin** et **entend ceux qui courent**. Ramasser un crâne fait du bruit, et chaque crâne trouvé
-  la rend plus rapide.
+- 👁 La créature dort pendant 15 secondes, puis elle chasse (à partir de 3 joueurs, elles sont
+  deux). Elle **voit les lampes allumées de loin** et **entend ceux qui courent**, et elle prend
+  les escaliers aussi. Ramasser un crâne fait du bruit, qui s'entend jusqu'à l'étage voisin, et
+  chaque crâne trouvé la rend plus rapide.
 - 🔦 Braquez votre lampe sur elle (≈1,5 s) pour la **faire fuir**. À plusieurs, c'est plus
   rapide. Ensuite, elle ne craint plus la lumière pendant quelques secondes.
 - 🌑 **Éteignez votre lampe pour vous cacher** : dans le noir, elle ne vous repère que de près.
@@ -67,8 +70,9 @@ Pendant la partie, Steam affiche « En jeu : Spacewar » pour tous les joueurs :
   vous relever. Sans aide, vous mourez au bout de 50 secondes.
 - 👻 Les morts deviennent des **fantômes** : ils traversent les murs, voient la créature à travers
   eux, et laissent des **signes** lumineux pour guider les vivants.
-- 🗺 Perdu·e ? Maintenez **M** pour consulter le plan du manoir : il montre les pièces et vos amis,
-  mais ni les crânes ni la créature.
+- 🗺 Perdu·e ? Maintenez **Tab** pour consulter le plan de l'étage où vous êtes : il montre les
+  pièces, les escaliers et l'étage où ils mènent, et vos amis (ceux des autres étages sont nommés
+  dessous), mais ni les crânes ni la créature.
 
 La partie se termine quand plus personne n'est debout dans le manoir.
 
@@ -82,8 +86,8 @@ La partie se termine quand plus personne n'est debout dans le manoir.
 | Courir | Maj |
 | Allumer / éteindre la lampe | F ou clic droit |
 | Relever un ami / signe de fantôme | E ou Espace (maintenir) |
-| Plan du manoir | M (maintenir) |
-| Suivre un autre joueur (après la fuite) | clic ou Tab |
+| Plan du manoir | Tab (maintenir) |
+| Suivre un autre joueur (après la fuite) | clic |
 | Menu : options (son, souris, affichage, mises à jour), quitter la partie ou le jeu | Échap |
 | Passer du plein écran à la fenêtre, et inversement | F11 |
 | Overlay Steam | Maj+Tab |
@@ -168,7 +172,7 @@ electron/update.js    mise à jour automatique depuis les releases GitHub
 server/room.js        salon, connexions et reconnexions, début et fin de partie (chez l'hôte)
 server/game.js        règles de la partie (crânes, piles, réanimation, sortie)
 server/monster.js     intelligence de la créature (vue, ouïe, poursuite, fuite)
-shared/               réglages, génération du manoir, collisions (hôte et page)
+shared/               réglages, génération du manoir et de ses étages, collisions, escaliers (hôte et page)
 public/js/render.js   le manoir en 3D (three.js) : murs, meubles, lumières, personnages, créature
 public/js/materials.js matières photographiées (rendu physique), posées à l'échelle réelle
 public/js/bc.js       photos compressées pour la carte graphique (dans texworker.js, hors du fil principal)
@@ -177,5 +181,5 @@ public/js/art.js      motifs dessinés par le code (murs, meubles, tapis…) et 
 public/textures/      photos des matières (Poly Haven, domaine public)
 public/js/hud.js      interface par-dessus la vue : crânes, équipe, repères, plan, apparitions
 public/js/main.js     écrans, réseau, déplacement du joueur, boucle de jeu (+ input.js, audio.js)
-test/                 tests du réseau (faux Steam) et de la mise à jour (faux GitHub)
+test/                 tests du réseau (faux Steam), de la mise à jour (faux GitHub) et du manoir à étages
 ```

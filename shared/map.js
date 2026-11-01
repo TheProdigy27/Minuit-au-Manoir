@@ -1,6 +1,9 @@
-// Génération procédurale du manoir : une grille de pièces reliées par des portes,
-// meublées selon leur thème. Le serveur génère, les navigateurs reçoivent le résultat.
+// Génération procédurale du manoir : sur chaque étage, une grille de pièces reliées par des portes,
+// meublées selon leur thème, et des escaliers d'un étage à l'autre. Les étages sont posés côte à côte
+// sur une seule grille, séparés par du vide (voir physics.js). Le serveur génère, les navigateurs
+// reçoivent le résultat.
 import { TILE } from './config.js';
+import { floorAt } from './physics.js';
 
 export function mulberry32(seed) {
   let a = seed >>> 0;
@@ -19,9 +22,19 @@ export const ROOM_NAMES = {
   storage: 'Débarras', bath: 'Salle de bain', conservatory: "Jardin d'hiver", nursery: "Chambre d'enfant",
   lab: 'Laboratoire',
 };
-const THEMES = Object.keys(ROOM_NAMES).filter(t => t !== 'foyer');
+
+// Étages, du bas vers le haut, et les pièces qu'on y trouve (tirées au hasard, sans remise tant que possible).
+export const LEVELS = {
+  cellar: { name: 'Sous-sol', short: 'sous-sol', themes: ['crypt', 'storage', 'lab', 'crypt', 'chapel', 'storage', 'kitchen'] },
+  ground: { name: 'Rez-de-chaussée', short: 'rez-de-chaussée', themes: ['library', 'dining', 'salon', 'kitchen', 'gallery', 'conservatory', 'chapel', 'storage'] },
+  upper: { name: 'Premier étage', short: 'étage', themes: ['bedroom', 'nursery', 'bath', 'library', 'bedroom', 'gallery', 'salon', 'lab', 'storage', 'bedroom'] },
+};
 
 export const CELL = { w: 10, h: 8 }; // intérieur d'une pièce élémentaire, en cases
+export const FLOOR_GAP = 16; // cases de vide entre deux étages, sur la grille
+// Escalier : 6 cases de long sur 2 de large, contre le mur nord de sa cellule, à 2 cases de ses bords
+// est et ouest (le palier du haut et l'entrée du bas ont ainsi 2 cases devant eux).
+const STAIR = { len: 6, wid: 2, at: 2 };
 
 const CANDLE = [255, 160, 70], FIRE = [255, 105, 35], MOON = [110, 140, 255];
 const GREEN = [80, 255, 120], PUMPKIN = [255, 120, 20], PINK = [255, 140, 200];
@@ -40,42 +53,91 @@ export function generateMap(seed, nPlayers = 4) {
   };
 
   const CW = CELL.w, CH = CELL.h;
-  const cols = nPlayers <= 2 ? 4 : nPlayers <= 4 ? 5 : 6;
-  const rows = nPlayers <= 2 ? 3 : 4;
-  const w = cols * (CW + 1) + 1, h = rows * (CH + 1) + 1;
-  const tiles = new Uint8Array(w * h).fill(TILE.WALL);
+  const cols = nPlayers <= 4 ? 4 : 5, rows = 3;
+  const kinds = nPlayers <= 2 ? ['ground', 'upper'] : ['cellar', 'ground', 'upper'];
+  const nf = kinds.length, ground = kinds.indexOf('ground');
+  const fw = cols * (CW + 1) + 1, h = rows * (CH + 1) + 1, stride = fw + FLOOR_GAP;
+  const w = nf * stride - FLOOR_GAP;
+  const floors = kinds.map((kind, f) => ({ kind, name: LEVELS[kind].name, short: LEVELS[kind].short, ox: f * stride }));
+  const tiles = new Uint8Array(w * h).fill(TILE.VOID);
   const I = (x, y) => y * w + x;
   const get = (x, y) => (x < 0 || y < 0 || x >= w || y >= h ? TILE.VOID : tiles[I(x, y)]);
+  for (const { ox } of floors) for (let y = 0; y < h; y++) tiles.fill(TILE.WALL, I(ox, y), I(ox + fw, y));
 
   // --- Cellules ---
   const cells = [];
-  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
-    const cell = { id: cells.length, c, r, x: c * (CW + 1) + 1, y: r * (CH + 1) + 1, room: -1 };
-    cells.push(cell);
-    for (let y = cell.y; y < cell.y + CH; y++) for (let x = cell.x; x < cell.x + CW; x++) tiles[I(x, y)] = TILE.FLOOR;
+  for (let f = 0; f < nf; f++) {
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const cell = { id: cells.length, f, c, r, x: floors[f].ox + c * (CW + 1) + 1, y: r * (CH + 1) + 1, room: -1 };
+      cells.push(cell);
+      for (let y = cell.y; y < cell.y + CH; y++) for (let x = cell.x; x < cell.x + CW; x++) tiles[I(x, y)] = TILE.FLOOR;
+    }
   }
-  const cellAt = (c, r) => (c < 0 || r < 0 || c >= cols || r >= rows ? null : cells[r * cols + c]);
-  const foyer = cellAt(Math.floor(cols / 2), rows - 1);
+  const cellAt = (f, c, r) => (c < 0 || r < 0 || c >= cols || r >= rows ? null : cells[(f * rows + r) * cols + c]);
+  const foyer = cellAt(ground, Math.floor(cols / 2), rows - 1);
   const neighbours = cell =>
-    [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dc, dr]) => cellAt(cell.c + dc, cell.r + dr)).filter(Boolean);
-
-  // --- Plan : arbre couvrant aléatoire + boucles (indispensables pour semer la créature) ---
-  const links = new Map();
+    [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dc, dr]) => cellAt(cell.f, cell.c + dc, cell.r + dr)).filter(Boolean);
   const key = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
-  const seen = new Set([foyer.id]);
-  const stack = [foyer];
-  while (stack.length) {
-    const cur = stack[stack.length - 1];
-    const next = neighbours(cur).filter(n => !seen.has(n.id));
-    if (!next.length) { stack.pop(); continue; }
-    const n = pick(next);
-    seen.add(n.id);
-    links.set(key(cur.id, n.id), 'door');
-    stack.push(n);
+
+  // --- Escaliers : deux entre chaque étage et le suivant, un dans chaque moitié du manoir. Ils occupent
+  // le nord de la même cellule sur les deux étages, dont le mur nord ne reçoit alors ni porte ni fusion.
+  const stairs = [];
+  const stairCells = new Set();
+  const forbid = new Set();
+  const gridConnected = f => {
+    const start = cellAt(f, 0, 0), seen = new Set([start.id]), stack = [start];
+    while (stack.length) {
+      const cur = stack.pop();
+      for (const n of neighbours(cur)) {
+        if (!seen.has(n.id) && !forbid.has(key(cur.id, n.id))) { seen.add(n.id); stack.push(n); }
+      }
+    }
+    return seen.size === cols * rows;
+  };
+  for (let f = 0; f < nf - 1; f++) {
+    for (const west of [true, false]) {
+      const cand = [];
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const lo = cellAt(f, c, r), hi = cellAt(f + 1, c, r);
+          if (c < cols / 2 !== west || lo === foyer || hi === foyer || stairCells.has(lo.id) || stairCells.has(hi.id)) continue;
+          cand.push([lo, hi]);
+        }
+      }
+      for (const [lo, hi] of shuffle(cand)) {
+        const walls = lo.r > 0 ? [key(lo.id, lo.id - cols), key(hi.id, hi.id - cols)] : [];
+        for (const k of walls) forbid.add(k);
+        if (gridConnected(f) && gridConnected(f + 1)) {
+          stairCells.add(lo.id).add(hi.id);
+          stairs.push({ f, x: lo.x - floors[f].ox + STAIR.at, y: lo.y, len: STAIR.len, wid: STAIR.wid, dx: chance(0.5) ? 1 : -1 });
+          break;
+        }
+        for (const k of walls) forbid.delete(k);
+      }
+    }
+    if (!stairs.some(s => s.f === f)) return generateMap(seed + 1, nPlayers); // jamais vu, mais un étage isolé serait injouable
+  }
+
+  // --- Plan de chaque étage : arbre couvrant aléatoire + boucles (indispensables pour semer la créature) ---
+  const links = new Map();
+  for (let f = 0; f < nf; f++) {
+    const first = f === ground ? foyer : cellAt(f, 0, 0);
+    const seen = new Set([first.id]);
+    const stack = [first];
+    while (stack.length) {
+      const cur = stack[stack.length - 1];
+      const next = neighbours(cur).filter(n => !seen.has(n.id) && !forbid.has(key(cur.id, n.id)));
+      if (!next.length) { stack.pop(); continue; }
+      const n = pick(next);
+      seen.add(n.id);
+      links.set(key(cur.id, n.id), 'door');
+      stack.push(n);
+    }
   }
   for (const cell of cells) {
     for (const n of neighbours(cell)) {
-      if (n.id > cell.id && !links.has(key(cell.id, n.id)) && chance(0.32)) links.set(key(cell.id, n.id), 'door');
+      const k = key(cell.id, n.id);
+      if (n.id > cell.id && !links.has(k) && !forbid.has(k) && chance(0.32)) links.set(k, 'door');
     }
   }
 
@@ -95,27 +157,44 @@ export function generateMap(seed, nPlayers = 4) {
     const root = roots[cell.id];
     if (!roomByRoot.has(root)) {
       roomByRoot.set(root, rooms.length);
-      rooms.push({ id: rooms.length, cells: [], theme: '', name: '' });
+      rooms.push({ id: rooms.length, f: cell.f, cells: [], theme: '', name: '' });
     }
     const room = rooms[roomByRoot.get(root)];
     room.cells.push(cell.id);
     cell.room = room.id;
   }
-  let pool = [];
+  const pools = floors.map(() => []);
   for (const room of rooms) {
     if (room.cells.includes(foyer.id)) room.theme = 'foyer';
     else {
-      if (!pool.length) pool = shuffle(THEMES.slice());
+      const pool = pools[room.f];
+      if (!pool.length) pool.push(...shuffle(LEVELS[floors[room.f].kind].themes.slice()));
       room.theme = pool.pop();
     }
     room.name = ROOM_NAMES[room.theme];
   }
 
-  // --- Percement des portes ---
-  const roomIdx = new Int8Array(w * h).fill(-1);
+  const roomIdx = new Int16Array(w * h).fill(-1);
   for (const cell of cells) {
     for (let y = cell.y; y < cell.y + CH; y++) for (let x = cell.x; x < cell.x + CW; x++) roomIdx[I(x, y)] = cell.room;
   }
+
+  // --- Cage de chaque escalier, identique sur ses deux étages : les marches, un mur côté pièce, et le
+  // bout fermé (en haut sur l'étage du bas, sous le palier ; en bas sur celui du haut, au-dessus de l'entrée)
+  const wall = (x, y) => { tiles[I(x, y)] = TILE.WALL; roomIdx[I(x, y)] = -1; };
+  for (const s of stairs) {
+    for (const g of [s.f, s.f + 1]) {
+      const ox = floors[g].ox;
+      for (let i = 0; i < s.len; i++) {
+        for (let j = 0; j < s.wid; j++) tiles[I(ox + s.x + i, s.y + j)] = TILE.STAIR;
+        wall(ox + s.x + i, s.y + s.wid);
+      }
+      const end = (g === s.f) === (s.dx > 0) ? s.x + s.len : s.x - 1;
+      for (let j = 0; j < s.wid; j++) wall(ox + end, s.y + j);
+    }
+  }
+
+  // --- Percement des portes, là où les deux côtés sont du sol ---
   const doors = []; // [x, y, vertical]
   for (const [k, kind] of links) {
     const [a, b] = k.split('-').map(Number);
@@ -126,7 +205,9 @@ export function generateMap(seed, nPlayers = 4) {
       if (kind === 'merge') {
         for (let y = L.y; y < L.y + CH; y++) { tiles[I(x, y)] = TILE.FLOOR; roomIdx[I(x, y)] = L.room; }
       } else {
-        const y0 = ri(L.y + 1, L.y + CH - 1 - size);
+        const ok = y0 => [...Array(size).keys()].every(i => get(x - 1, y0 + i) === TILE.FLOOR && get(x + 1, y0 + i) === TILE.FLOOR);
+        const range = [...Array(CH - 1 - size).keys()].map(i => L.y + 1 + i);
+        const y0 = pick(range.filter(ok).length ? range.filter(ok) : range);
         for (let i = 0; i < size; i++) { tiles[I(x, y0 + i)] = TILE.FLOOR; doors.push([x, y0 + i, true]); }
       }
     } else {
@@ -134,7 +215,9 @@ export function generateMap(seed, nPlayers = 4) {
       if (kind === 'merge') {
         for (let x = T.x; x < T.x + CW; x++) { tiles[I(x, y)] = TILE.FLOOR; roomIdx[I(x, y)] = T.room; }
       } else {
-        const x0 = ri(T.x + 1, T.x + CW - 1 - size);
+        const ok = x0 => [...Array(size).keys()].every(i => get(x0 + i, y - 1) === TILE.FLOOR && get(x0 + i, y + 1) === TILE.FLOOR);
+        const range = [...Array(CW - 1 - size).keys()].map(i => T.x + 1 + i);
+        const x0 = pick(range.filter(ok).length ? range.filter(ok) : range);
         for (let i = 0; i < size; i++) { tiles[I(x0 + i, y)] = TILE.FLOOR; doors.push([x0 + i, y, false]); }
       }
     }
@@ -146,7 +229,7 @@ export function generateMap(seed, nPlayers = 4) {
   tiles[I(exit.x + 1, exit.y)] = TILE.EXIT;
   const spawn = { x: foyer.x + CW / 2, y: foyer.y + CH / 2 };
 
-  // Cases à garder libres : passages des portes, devant la sortie, point de départ
+  // Cases à garder libres : passages des portes, devant la sortie, point de départ, abords des escaliers
   const reserved = new Uint8Array(w * h);
   const reserve = (x, y) => { if (get(x, y) === TILE.FLOOR) reserved[I(x, y)] = 1; };
   for (const [x, y, vertical] of doors) {
@@ -156,26 +239,38 @@ export function generateMap(seed, nPlayers = 4) {
   }
   for (let y = exit.y - 3; y < exit.y; y++) for (let x = exit.x - 1; x <= exit.x + 2; x++) reserve(x, y);
   for (let y = spawn.y - 2; y < spawn.y + 2; y++) for (let x = spawn.x - 2; x < spawn.x + 2; x++) reserve(x, y);
+  for (const s of stairs) {
+    // entrée en bas sur l'étage du bas, palier en haut sur celui du haut
+    for (const [g, top] of [[s.f, false], [s.f + 1, true]]) {
+      const x0 = floors[g].ox + (top === s.dx > 0 ? s.x + s.len : s.x - STAIR.at);
+      for (let y = s.y; y <= s.y + s.wid; y++) for (let x = x0; x < x0 + STAIR.at; x++) reserve(x, y);
+    }
+  }
 
-  // --- Mobilier : chaque meuble n'est gardé que si tout le sol reste accessible ---
-  let floorCount = 0;
-  for (const t of tiles) if (t === TILE.FLOOR) floorCount++;
-  const startIdx = I(spawn.x, spawn.y);
+  // --- Mobilier : chaque meuble n'est gardé que si tout l'étage reste accessible (escaliers compris) ---
+  const walkable = t => t === TILE.FLOOR || t === TILE.STAIR;
+  const openCount = floors.map(() => 0);
+  for (let i = 0; i < w * h; i++) if (walkable(tiles[i])) openCount[Math.floor((i % w) / stride)]++;
+  const geo = { w, h, floors, stride, stairs };
+  const starts = floors.map((fl, f) => {
+    const s = stairs.find(st => st.f === f || st.f + 1 === f);
+    return I(fl.ox + s.x, s.y);
+  });
   const mark = new Uint8Array(w * h);
   const queue = new Int32Array(w * h);
-  function connected() {
+  function connected(f) {
     mark.fill(0);
     let head = 0, tail = 0, count = 0;
-    queue[tail++] = startIdx;
-    mark[startIdx] = 1;
+    queue[tail++] = starts[f];
+    mark[starts[f]] = 1;
     while (head < tail) {
       const i = queue[head++];
       count++;
       for (const j of [i - 1, i + 1, i - w, i + w]) {
-        if (!mark[j] && tiles[j] === TILE.FLOOR) { mark[j] = 1; queue[tail++] = j; }
+        if (!mark[j] && walkable(tiles[j])) { mark[j] = 1; queue[tail++] = j; }
       }
     }
-    return count === floorCount;
+    return count === openCount[f];
   }
 
   const furniture = [], decals = [], lights = [], wallDeco = [];
@@ -186,22 +281,33 @@ export function generateMap(seed, nPlayers = 4) {
       for (let i = x; i < x + fw; i++) if (get(i, j) !== TILE.FLOOR || reserved[I(i, j)]) return null;
     }
     const v = tall ? TILE.TALL : TILE.LOW;
+    const f = floorAt(geo, x);
     for (let j = y; j < y + fh; j++) for (let i = x; i < x + fw; i++) tiles[I(i, j)] = v;
-    floorCount -= fw * fh;
-    if (!connected()) {
+    openCount[f] -= fw * fh;
+    if (!connected(f)) {
       for (let j = y; j < y + fh; j++) for (let i = x; i < x + fw; i++) tiles[I(i, j)] = TILE.FLOOR;
-      floorCount += fw * fh;
+      openCount[f] += fw * fh;
       return null;
     }
-    const f = { k, x, y, w: fw, h: fh, ...extra };
-    furniture.push(f);
-    return f;
+    const item = { k, x, y, w: fw, h: fh, ...extra };
+    furniture.push(item);
+    return item;
   }
 
   function furnish(cell, theme) {
     const X = cell.x, Y = cell.y;
+    // le nord d'une cellule à escalier est pris par sa cage : les tapis descendent en dessous
+    const top = stairCells.has(cell.id) ? STAIR.wid + 1 : 0;
     const P = (k, lx, ly, fw, fh, tall, extra) => place(k, X + lx, Y + ly, fw, fh, tall, extra);
-    const D = (k, lx, ly, extra = {}) => decals.push({ k, x: X + lx, y: Y + ly, ...extra });
+    const D = (k, lx, ly, extra = {}) => {
+      if (extra.h && ly < top) {
+        ly += Math.max(0, Math.min(top - ly, CH - ly - extra.h));
+        if (ly < top) extra = { ...extra, h: extra.h - (top - ly) };
+        ly = Math.max(ly, top);
+        if (extra.h < 2) return;
+      }
+      decals.push({ k, x: X + lx, y: Y + ly, ...extra });
+    };
     const Lt = (lx, ly, r, c, k) => light(X + lx, Y + ly, r, c, k);
     const free = (lx, ly) => get(X + Math.floor(lx), Y + Math.floor(ly)) === TILE.FLOOR;
     const candleOn = f => f && light(f.x + f.w / 2, f.y + f.h / 2, 2.6, CANDLE, 'candle');
@@ -344,7 +450,7 @@ export function generateMap(seed, nPlayers = 4) {
     const X = cell.x, Y = cell.y;
     const free = (lx, ly) => get(X + Math.floor(lx), Y + Math.floor(ly)) === TILE.FLOOR;
     for (const [lx, ly, corner] of [[0, 0, 0], [CW - 1, 0, 1], [0, CH - 1, 2], [CW - 1, CH - 1, 3]]) {
-      if (chance(0.35)) decals.push({ k: 'web', x: X + lx, y: Y + ly, corner });
+      if (chance(0.35) && free(lx, ly)) decals.push({ k: 'web', x: X + lx, y: Y + ly, corner });
     }
     if (chance(0.35)) { const lx = rnd() * CW, ly = rnd() * CH; if (free(lx, ly)) decals.push({ k: 'blood', x: X + lx, y: Y + ly, s: 0.5 + rnd() }); }
     if (chance(0.25)) { const lx = rnd() * CW, ly = rnd() * CH; if (free(lx, ly)) decals.push({ k: 'scratch', x: X + lx, y: Y + ly, r: rnd() * 6.28 }); }
@@ -354,17 +460,18 @@ export function generateMap(seed, nPlayers = 4) {
     }
   }
 
-  // Décor mural sur les faces visibles des murs (un mur dont la case du dessous n'est pas un mur)
+  // Décor mural sur les faces visibles des murs (un mur dont la case du dessous n'est pas un mur ni un
+  // escalier) ; des fenêtres sur la façade nord, sauf au sous-sol
   let lastWindow = -9;
   for (let y = 0; y < h - 1; y++) {
     for (let x = 1; x < w - 1; x++) {
       if (get(x, y) !== TILE.WALL) continue;
       const below = get(x, y + 1);
-      if (below === TILE.WALL || below === TILE.VOID || below === TILE.EXIT) continue;
+      if (below === TILE.WALL || below === TILE.VOID || below === TILE.EXIT || below === TILE.STAIR) continue;
       const r = roomIdx[I(x, y + 1)];
       const theme = r >= 0 ? rooms[r].theme : '';
       const blocked = below === TILE.TALL;
-      if (y === 0 && !blocked && x - lastWindow > 2 && chance(0.4)) {
+      if (y === 0 && !blocked && x - lastWindow > 2 && floors[floorAt(geo, x)].kind !== 'cellar' && chance(0.4)) {
         wallDeco.push({ k: 'window', x, y });
         light(x + 0.5, 1.9, 2.8, MOON, 'moon');
         lastWindow = x;
@@ -388,10 +495,10 @@ export function generateMap(seed, nPlayers = 4) {
   });
 
   return {
-    seed, w, h, tiles,
+    seed, w, h, tiles, fw, stride, floors, ground, stairs,
     grid: { cols, rows, cw: CW, ch: CH },
-    rooms: rooms.map(r => ({ id: r.id, theme: r.theme, name: r.name })),
-    cells: cells.map(c => ({ id: c.id, c: c.c, r: c.r, x: c.x, y: c.y, room: c.room })),
+    rooms: rooms.map(r => ({ id: r.id, f: r.f, theme: r.theme, name: r.name })),
+    cells: cells.map(c => ({ id: c.id, f: c.f, c: c.c, r: c.r, x: c.x, y: c.y, room: c.room })),
     roomIdx, furniture, decals, lights, wallDeco, exit, spawn,
     foyerCell: foyer.id,
     spots,
@@ -400,7 +507,32 @@ export function generateMap(seed, nPlayers = 4) {
 
 export function cellOf(map, x, y) {
   const { cols, rows, cw, ch } = map.grid;
-  const c = Math.max(0, Math.min(cols - 1, Math.floor((x - 1) / (cw + 1))));
+  const f = floorAt(map, x), lx = x - map.floors[f].ox;
+  const c = Math.max(0, Math.min(cols - 1, Math.floor((lx - 1) / (cw + 1))));
   const r = Math.max(0, Math.min(rows - 1, Math.floor((y - 1) / (ch + 1))));
-  return map.cells[r * cols + c];
+  return map.cells[(f * rows + r) * cols + c];
+}
+
+// Un étage seul, dans ses propres coordonnées (x de 0 à map.fw), pour le dessiner comme un manoir de
+// plain-pied. Les lumières gardent leur numéro dans le manoir (`gi`) ; `up` : l'escalier part de cet étage.
+export function levelView(map, f) {
+  const { ox } = map.floors[f], w = map.fw, h = map.h;
+  const tiles = new Uint8Array(w * h), roomIdx = new Int16Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      tiles[y * w + x] = map.tiles[y * map.w + ox + x];
+      roomIdx[y * w + x] = map.roomIdx[y * map.w + ox + x];
+    }
+  }
+  const here = list => list.filter(o => o.x >= ox && o.x < ox + w).map(o => ({ ...o, x: o.x - ox }));
+  return {
+    f, seed: map.seed + f * 7919, w, h, tiles, roomIdx, rooms: map.rooms, grid: map.grid,
+    cells: here(map.cells.filter(c => c.f === f)),
+    furniture: here(map.furniture),
+    decals: here(map.decals),
+    wallDeco: here(map.wallDeco),
+    lights: here(map.lights.map((l, gi) => ({ ...l, gi }))),
+    exit: f === map.ground ? here([map.exit])[0] : null,
+    stairs: map.stairs.filter(s => s.f === f || s.f + 1 === f).map(s => ({ ...s, up: s.f === f })),
+  };
 }

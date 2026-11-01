@@ -1,17 +1,19 @@
 // Rendu en première personne (three.js) : le manoir en volume, la lampe torche et les bougies,
 // les autres joueurs, la créature et les objets. L'interface est dessinée par-dessus (hud.js).
 import * as THREE from '/vendor/three.module.min.js';
-import { TILE, CFG, batteryFactor } from '/shared/config.js';
-import { tileAt, lineOfSight } from '/shared/physics.js';
-import { mulberry32 } from '/shared/map.js';
+import { TILE, CFG, COLORS, batteryFactor } from '/shared/config.js';
+import { tileAt, lineOfSight, floorAt, stairAt, levelDist } from '/shared/physics.js';
+import { mulberry32, levelView, generateMap } from '/shared/map.js';
 import * as art from './art.js';
-import { surface, shine, meters, setAnisotropy, setCompression, setEnvironment, texturesReady, nightEnvironment } from './materials.js';
+import { surface, shine, meters, setAnisotropy, setCompression, setEnvironment, texturesReady, texturesLoaded, nightEnvironment } from './materials.js';
 import { Post } from './post.js';
 import { playerBody, monsterLimbs, AIM } from './figures.js';
 import { Hud } from './hud.js';
 
 export const WALL_H = 2.6; // hauteur sous plafond (une case = un mètre)
+export const STOREY = 3; // d'un étage au suivant : le plafond, puis l'épaisseur du plancher
 const DOOR_H = 2.15;
+const STEPS = 16; // marches d'un escalier
 const TAU = Math.PI * 2;
 const SLOTS = 12; // bougies et lueurs éclairant réellement la scène (les plus proches)
 const BEAMS = 3; // lampes des autres joueurs qui éclairent la scène
@@ -24,6 +26,9 @@ const GREEN = new THREE.Color().setRGB(80 / 255, 1, 120 / 255, THREE.SRGBColorSp
 const PING = new THREE.Color().setRGB(140 / 255, 180 / 255, 1, THREE.SRGBColorSpace);
 const OUTSIDE = new THREE.Color().setRGB(150 / 255, 1, 190 / 255, THREE.SRGBColorSpace);
 const PINGS = 8; // signes de fantômes affichés en même temps, préparés d'avance
+
+// Laisse la page se peindre avant un long calcul (sans attendre indéfiniment une fenêtre réduite).
+const nextPaint = () => new Promise(ok => { requestAnimationFrame(() => setTimeout(ok)); setTimeout(ok, 100); });
 
 // Une lumière qui n'atteint pas le pixel (au-delà de sa portée, hors de son cône) n'est pas calculée :
 // même image, mais chaque bougie n'éclaire qu'une petite partie de l'écran.
@@ -536,32 +541,52 @@ export class Renderer {
   // Construction du manoir
   // -------------------------------------------------------------------------
 
+  // Chaque étage est construit à part, comme un manoir de plain-pied (levelView), dans un groupe posé à
+  // sa hauteur : seuls ceux qu'on peut voir sont dessinés (voir updateFloors).
   setMap(map) {
+    for (const _ of this.buildMap(map));
+  }
+
+  // La même construction, un étage à la fois : l'écran de chargement (warmUp) rend la main à la page entre deux.
+  *buildMap(map) {
     this.clearWorld();
     this.map = map;
     this.world = new THREE.Group();
     this.scene.add(this.world);
-    const maxTex = this.gl.capabilities.maxTextureSize;
-    const k = Math.min(2, maxTex / (map.w * art.TS), maxTex / (map.h * art.TS), Math.sqrt(12e6 / (map.w * map.h * art.TS * art.TS)));
-    this.planTex = this.own(this.texture(art.buildPlan(map, k, true)));
-    this.floorMats = new Map();
-    this.planMats = new Map();
-    this.topAt = new Float32Array(map.w * map.h);
-    this.kindAt = new Array(map.w * map.h);
-    const B = new Builder(map.w, map.h);
-    this.buildShell(B, map);
-    for (const f of map.furniture) this.buildFurniture(B, f, map);
-    this.buildDecor(B, map);
-    this.buildLights(B, map);
-    this.buildExit(B, map);
-    B.build(this.world, this.depth);
+    this.statics = [];
+    const maxTex = this.gl.capabilities.maxTextureSize, budget = 18e6 / map.floors.length;
+    this.levels = [];
+    for (let f = 0; f < map.floors.length; f++) {
+      const lv = levelView(map, f);
+      const group = (this.layer = new THREE.Group()), depth = (this.layerDepth = new THREE.Group());
+      group.position.y = depth.position.y = f * STOREY;
+      this.world.add(group);
+      this.depth.add(depth);
+      const k = Math.min(2, maxTex / (lv.w * art.TS), maxTex / (lv.h * art.TS), Math.sqrt(budget / (lv.w * lv.h * art.TS * art.TS)));
+      this.planTex = this.own(this.texture(art.buildPlan(lv, k, true)));
+      this.floorMats = new Map();
+      this.planMats = new Map();
+      this.topAt = new Float32Array(lv.w * lv.h);
+      this.kindAt = new Array(lv.w * lv.h);
+      const B = new Builder(lv.w, lv.h);
+      this.buildShell(B, lv);
+      for (const it of lv.furniture) this.buildFurniture(B, it, lv);
+      this.buildDecor(B, lv);
+      this.buildLights(B, lv);
+      this.buildStairs(B, lv);
+      if (lv.exit) this.buildExit(B, lv);
+      B.build(group, depth);
+      this.levels.push({ group, depth, plan: art.buildPlan(lv, 1) });
+      yield (f + 1) / map.floors.length;
+    }
     this.items = new Map();
     this.rigs = new Map();
     this.mrigs = [];
     this.pingObjs = [];
     this.weights = new Map();
     this.exitAngle = 0;
-    this.hud.setMap(map, art.buildPlan(map, 1));
+    this.shown = new Set([map.ground]);
+    this.hud.setMap(map, this.levels.map(l => l.plan));
   }
 
   clearWorld() {
@@ -577,19 +602,36 @@ export class Renderer {
   buildShell(B, map) {
     const { w, h } = map, M = this.S.m;
     const theme = (x, y) => this.wallMat(art.themeNear(map, x, y));
+    // cages des escaliers qui montent d'ici : ni plafond, et leurs murs vont jusqu'au plancher du dessus
+    const up = new Uint8Array(w * h);
+    for (const s of map.stairs) {
+      if (s.up) for (let y = s.y; y < s.y + s.wid; y++) for (let x = s.x; x < s.x + s.len; x++) up[y * w + x] = 1;
+    }
+    const upAt = (x, y) => x >= 0 && y >= 0 && x < w && y < h && up[y * w + x] === 1;
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        if (tileAt(map, x, y) !== TILE.WALL) B.quad(this.floorMat(art.themeNear(map, x, y)), v3(x, 0, y + 1), v3(x + 1, 0, y + 1), v3(x + 1, 0, y), v3(x, 0, y));
+        const t = tileAt(map, x, y);
+        if (t !== TILE.WALL && t !== TILE.STAIR && t !== TILE.VOID) B.quad(this.floorMat(art.themeNear(map, x, y)), v3(x, 0, y + 1), v3(x + 1, 0, y + 1), v3(x + 1, 0, y), v3(x, 0, y));
       }
     }
-    B.quad(M.ceiling, v3(0, WALL_H, 0), v3(w, WALL_H, 0), v3(w, WALL_H, h), v3(0, WALL_H, h), [[0, 0], [w, 0], [w, h], [0, h]]);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w;) {
+        if (upAt(x, y)) { x++; continue; }
+        let x1 = x;
+        while (x1 < w && !upAt(x1, y)) x1++;
+        B.quad(M.ceiling, v3(x, WALL_H, y), v3(x1, WALL_H, y), v3(x1, WALL_H, y + 1), v3(x, WALL_H, y + 1), [[x, y], [x1, y], [x1, y + 1], [x, y + 1]]);
+        x = x1;
+      }
+    }
     const open = t => t !== TILE.WALL && t !== TILE.VOID;
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         if (tileAt(map, x, y) !== TILE.WALL) continue;
         for (const [dx, dy] of DIRS4) {
           if (!open(tileAt(map, x + dx, y + dy))) continue;
-          B.wall(theme(x + dx, y + dy), x + 0.5 + dx * 0.5, y + 0.5 + dy * 0.5, dx, dy, 0, WALL_H, (x * 7 + y * 13 + dx + 2 * dy + 3) % 3);
+          const cx = x + 0.5 + dx * 0.5, cz = y + 0.5 + dy * 0.5;
+          B.wall(theme(x + dx, y + dy), cx, cz, dx, dy, 0, WALL_H, (x * 7 + y * 13 + dx + 2 * dy + 3) % 3);
+          if (upAt(x + dx, y + dy)) B.wall(M.beam, cx, cz, dx, dy, WALL_H, STOREY, 0); // tranche du plancher
         }
       }
     }
@@ -642,9 +684,41 @@ export class Renderer {
       }
     }
 
-    // Poutres au plafond
+    // Poutres au plafond (coupées au-dessus des cages d'escalier)
     for (const cell of map.cells) {
-      for (let dz = 2; dz < ch; dz += 2) B.box(cell.x, WALL_H - 0.2, cell.y + dz - 0.09, cell.x + cw, WALL_H, cell.y + dz + 0.09, null, M.beam, { bottom: M.beam });
+      for (let dz = 2; dz < ch; dz += 2) {
+        const z = cell.y + dz, cut = x => upAt(x, z - 1) || upAt(x, z);
+        for (let x = cell.x; x < cell.x + cw;) {
+          if (cut(x)) { x++; continue; }
+          let x1 = x;
+          while (x1 < cell.x + cw && !cut(x1)) x1++;
+          B.box(x, WALL_H - 0.2, z - 0.09, x1, WALL_H, z + 0.09, null, M.beam, { bottom: M.beam });
+          x = x1;
+        }
+      }
+    }
+  }
+
+  // Escaliers qui montent de cet étage : marches de bois, tapis cloué, mains courantes le long des deux
+  // murs, et la tranche du plancher du dessus au-dessus de l'entrée.
+  buildStairs(B, map) {
+    const M = this.S.m, rise = STOREY / STEPS;
+    for (const s of map.stairs) {
+      if (!s.up) continue;
+      const run = s.len / STEPS, X = a => (s.dx > 0 ? s.x + a : s.x + s.len - a);
+      const z0 = s.y, z1 = s.y + s.wid;
+      for (let i = 0; i < STEPS; i++) {
+        const xa = X(i * run), xb = X((i + 1) * run), x0 = Math.min(xa, xb), x1 = Math.max(xa, xb), top = (i + 1) * rise;
+        B.box(x0, 0, z0, x1, top, z1, M.wood, M.wood);
+        const nose = 0.012 * s.dx; // le tapis recouvre la contremarche, côté descente
+        B.box(Math.min(xa - nose, xb), i * rise, z0 + 0.38, Math.max(xa - nose, xb), top + 0.012, z1 - 0.38, M.velvet, M.velvet);
+      }
+      const len = Math.hypot(s.len, STOREY), dir = v3(s.dx * s.len, STOREY, 0).normalize();
+      const q = new THREE.Quaternion().setFromUnitVectors(v3(0, 1, 0), dir);
+      for (const z of [z0 + 0.07, z1 - 0.07]) {
+        B.geo(M.wood, new THREE.CylinderGeometry(0.028, 0.028, len, 10), new THREE.Matrix4().compose(v3(X(s.len / 2), 0.92 + STOREY / 2, z), q, v3(1, 1, 1)));
+      }
+      for (let j = 0; j < s.wid; j++) B.wall(M.beam, X(0), s.y + j + 0.5, s.dx, 0, WALL_H, STOREY, 0);
     }
   }
 
@@ -997,7 +1071,7 @@ export class Renderer {
         }
       }
     }
-    BB.build(this.world, this.depth);
+    BB.build(this.layer, this.layerDepth);
   }
 
   buildDecor(B, map) {
@@ -1051,17 +1125,19 @@ export class Renderer {
   }
 
   // Bougies, lustres, feux de cheminée… : leur flamme, leur halo, et leur place pour l'éclairage.
+  // `i` : numéro de la lumière dans le manoir (bougies soufflées) ; x, y : dans l'étage `f` ; gx : x sur
+  // la grille du manoir.
   buildLights(B, map) {
-    const M = this.S.m, w = map.w;
+    const M = this.S.m, w = map.w, ox = this.map.floors[map.f].ox;
     const kindAt = (x, y) => this.kindAt[Math.floor(y) * w + Math.floor(x)];
-    this.statics = map.lights.map((l, i) => {
+    this.statics.push(...map.lights.map(l => {
       const color = new THREE.Color().setRGB(l.c[0] / 255, l.c[1] / 255, l.c[2] / 255, THREE.SRGBColorSpace);
-      const L = { ...l, i, color, ph: Math.random() * 100, h: 0, power: 2.2, range: l.r * 1.6, flames: [], halo: null };
+      const L = { ...l, i: l.gi, f: map.f, gx: l.x + ox, color, ph: Math.random() * 100, h: 0, power: 2.2, range: l.r * 1.6, flames: [], halo: null };
       const flame = (x, y, z, s = 1) => {
         const sp = new THREE.Sprite(this.S.flame);
         sp.position.set(x, y, z);
         sp.userData.s = s;
-        this.world.add(sp);
+        this.layer.add(sp);
         L.flames.push(sp);
       };
       const candle = (x, y, z, hh = 0.13) => {
@@ -1134,11 +1210,11 @@ export class Renderer {
         const size = l.k === 'chandelier' ? 1.6 : l.k === 'fire' ? 1.4 : L.h > 1.6 && l.k === 'candle' ? 0.45 : 0.6;
         sp.scale.setScalar(size);
         sp.userData.size = size;
-        this.world.add(sp);
+        this.layer.add(sp);
         L.halo = sp;
       }
       return L;
-    });
+    }));
   }
 
   buildExit(B, map) {
@@ -1154,7 +1230,7 @@ export class Renderer {
     const sky = new THREE.Mesh(new THREE.PlaneGeometry(12, 6), this.own(new THREE.MeshBasicMaterial({ map: S.night, fog: false })));
     sky.position.set((x0 + x1) / 2, 2.4, h + 4);
     sky.rotation.y = Math.PI;
-    this.world.add(sky);
+    this.layer.add(sky);
     this.outside = sky;
 
     const leafMat = this.sideMat('door', top), half = ex.w / 2;
@@ -1165,7 +1241,7 @@ export class Renderer {
       m.position.set(dir * (half / 2), top / 2, 0);
       m.castShadow = m.receiveShadow = true;
       pivot.add(m);
-      this.world.add(pivot);
+      this.layer.add(pivot);
       return pivot;
     };
     this.leafL = leaf(x0, 1);
@@ -1175,7 +1251,7 @@ export class Renderer {
     })));
     this.seal.position.set((x0 + x1) / 2, 1.3, z0 - 0.03);
     this.seal.rotation.y = Math.PI;
-    this.world.add(this.seal);
+    this.layer.add(this.seal);
   }
 
   // -------------------------------------------------------------------------
@@ -1490,7 +1566,7 @@ export class Renderer {
     let o = this.items.get(it.id);
     if (!o) {
       o = it.type === 'skull' ? this.makeSkull() : this.makeBattery();
-      o.position.set(it.x, 0, it.y);
+      o.position.set(this.sceneX(it.x), this.ground(it.x, it.y), it.y);
       this.world.add(o);
       this.items.set(it.id, o);
     }
@@ -1498,23 +1574,73 @@ export class Renderer {
   }
 
   // Avant la première image d'une partie (après setMap) : tout ce qui peut apparaître en jeu est créé,
-  // ses shaders compilés en arrière-plan sans figer la page, puis une image d'essai où tout est visible
-  // envoie les textures à la carte graphique et prépare les ombres. Sans cela, chaque nouveauté (ami à
+  // ses shaders compilés en arrière-plan sans figer la page, ses textures envoyées à la carte graphique,
+  // puis une image d'essai où tout est visible prépare les ombres. Sans cela, chaque nouveauté (ami à
   // terre, fantôme, signe…) figeait le jeu le temps de compiler : plusieurs secondes au premier lancement.
-  async prepare(G) {
-    await this.ready; // photos chargées (et compressées) pendant l'écran titre
+  // Après l'écran de chargement (warmUp), les programmes sont déjà tous là.
+  // `progress(étape, k)` : avancement des shaders ('shaders'), puis part des textures envoyées ('image').
+  async prepare(G, progress = () => {}) {
     for (const p of G.players.values()) this.rig(p);
     this.monsterRigs(G.monsters.length);
     for (const it of G.items.values()) this.item(it);
     while (this.pingObjs.length < PINGS) this.pingObjs.push(this.makePing());
     const gl = this.gl, post = this.post, vmCam = this.vmCamera();
-    // les shaders dépendent de la cible du rendu (image en haute dynamique, sans correction de tons)
-    gl.setRenderTarget(post.target);
-    await Promise.all([
-      gl.compileAsync(this.scene, this.camera),
-      gl.compileAsync(this.depth, this.camera),
-      gl.compileAsync(this.vm.scene, vmCam),
-    ]);
+    // Shaders lancés par petits groupes de matériaux, une image peinte tous les quelques nouveaux
+    // programmes : la carte graphique les traduit sur le fil qui peint aussi la page, figée sinon le temps
+    // de tous les traduire (1,5 s au premier lancement). Elle les compile ensuite en arrière-plan
+    // (KHR_parallel_shader_compile). Ils dépendent de la cible du rendu (image en haute dynamique).
+    const groups = [];
+    for (const [scene, camera] of [[this.scene, this.camera], [this.depth, this.camera], [this.vm.scene, vmCam]]) {
+      const seen = new Set();
+      let group = null;
+      scene.traverse(o => {
+        if (!o.material) return;
+        const fresh = [o.material].flat().filter(m => !seen.has(m));
+        if (!group || (fresh.length && group.fresh >= 4)) groups.push((group = { scene, camera, objects: [], fresh: 0 }));
+        group.objects.push(o);
+        group.fresh += fresh.length;
+        for (const m of fresh) seen.add(m);
+      });
+    }
+    const programs = new Set();
+    let unpainted = 0;
+    for (const [i, { scene, camera, objects }] of groups.entries()) {
+      const before = gl.info.programs.length;
+      gl.setRenderTarget(post.target);
+      for (const m of gl.compile({ traverse: f => objects.forEach(f), traverseVisible() {} }, camera, scene)) programs.add(gl.properties.get(m).currentProgram);
+      unpainted += gl.info.programs.length - before;
+      if (unpainted >= 4) {
+        progress('shaders', (0.3 * (i + 1)) / groups.length);
+        await nextPaint();
+        unpainted = 0;
+      }
+    }
+    const total = programs.size;
+    for (;;) {
+      for (const p of programs) if (p.isReady()) programs.delete(p);
+      progress('shaders', 0.3 + (0.7 * (total - programs.size)) / (total || 1));
+      if (!programs.size) break;
+      await new Promise(ok => setTimeout(ok, 10));
+    }
+    // les photos ont pu arriver pendant ce temps (les programmes ne dépendent pas de leur contenu)
+    await this.ready;
+    const textures = new Set();
+    for (const scene of [this.scene, this.vm.scene]) {
+      scene.traverse(o => {
+        for (const m of [o.material ?? []].flat()) for (const v of Object.values(m)) if (v?.isTexture) textures.add(v);
+      });
+    }
+    let sent = 0, slice = performance.now();
+    for (const t of textures) {
+      gl.initTexture(t);
+      if (++sent < textures.size && performance.now() - slice > 30) {
+        progress('image', sent / textures.size);
+        await new Promise(ok => setTimeout(ok));
+        slice = performance.now();
+      }
+    }
+    progress('image', 1);
+    await nextPaint(); // l'image d'essai fige la page un instant : qu'elle montre d'abord où l'on en est
     const saved = [];
     for (const scene of [this.scene, this.vm.scene]) {
       scene.traverse(o => {
@@ -1536,6 +1662,48 @@ export class Renderer {
     }
   }
 
+  // Au lancement du jeu, derrière l'écran de chargement : un manoir d'essai (le plus varié de quelques-uns
+  // tirés pour 5 joueurs : trois étages, toutes les sortes de pièces et de meubles) est construit pendant
+  // que les photos se chargent, puis préparé comme une partie. Ses matériaux ne sont jamais libérés :
+  // leurs programmes restent compilés, et chaque partie les retrouve aussitôt (même matière, mêmes
+  // lumières : même programme). `progress(done)` : part faite de chaque étape, de 0 à 1 (manor, textures,
+  // shaders, image).
+  async warmUp(progress) {
+    const done = { manor: 0, textures: 0, shaders: 0, image: 0 };
+    const report = () => progress(Object.assign(done, { textures: texturesLoaded() }));
+    const photos = setInterval(report, 50);
+    try {
+      report();
+      await nextPaint();
+      const variety = m => new Set([m.rooms.map(r => r.theme), m.furniture, m.decals, m.wallDeco, m.lights].flatMap((list, i) => list.map(o => i + (o.k ?? o)))).size;
+      let map = null;
+      for (let seed = 1, best = -1; seed <= 12; seed++) {
+        const m = generateMap(seed, 5), n = variety(m);
+        if (n > best) [map, best] = [m, n];
+      }
+      for (const k of this.buildMap(map)) {
+        done.manor = k;
+        report();
+        await nextPaint();
+      }
+      const at = { x: map.spawn.x, y: map.spawn.y };
+      const G = {
+        players: new Map([0, 1].map(id => [id, { id, color: COLORS[id], ...at }])),
+        monsters: [at, at],
+        items: new Map([{ id: 0, type: 'skull', ...at }, { id: 1, type: 'battery', ...at }].map(it => [it.id, it])),
+      };
+      await this.prepare(G, (step, k) => {
+        done[step] = k;
+        report();
+      });
+    } finally {
+      clearInterval(photos);
+    }
+    // géométries et textures libérées, matériaux gardés (avec leurs programmes)
+    this.owned = this.owned.filter(x => !x.isMaterial);
+    this.clearWorld();
+  }
+
   // -------------------------------------------------------------------------
   // Image
   // -------------------------------------------------------------------------
@@ -1550,12 +1718,45 @@ export class Renderer {
     return k;
   }
 
-  // Position à l'écran (pixels de l'interface) d'un point du manoir à la hauteur `h`.
+  // D'un point de la grille du manoir à la scène : x dans son étage, et hauteur du sol sous lui (son
+  // étage, ou sa montée dans un escalier).
+  sceneX(x) {
+    return x - this.map.floors[floorAt(this.map, x)].ox;
+  }
+
+  ground(x, y) {
+    const at = stairAt(this.map, x, y);
+    return (at ? at.s.f + at.t : floorAt(this.map, x)) * STOREY;
+  }
+
+  // Position à l'écran (pixels de l'interface) d'un point du manoir à la hauteur `h` au-dessus du sol.
   project(x, y, h, w, H) {
-    const cs = tmp.set(x, h, y).applyMatrix4(this.camera.matrixWorldInverse);
+    const px = this.sceneX(x), py = this.ground(x, y) + h;
+    const cs = tmp.set(px, py, y).applyMatrix4(this.camera.matrixWorldInverse);
     const cx = cs.x, cy = cs.y, behind = cs.z > -0.05;
-    tmp.set(x, h, y).project(this.camera);
+    tmp.set(px, py, y).project(this.camera);
     return { x: ((tmp.x + 1) / 2) * w, y: ((1 - tmp.y) / 2) * H, behind, cx, cy };
+  }
+
+  // Étages dessinés : celui où l'on est, et celui où mène un escalier quand on est dans sa pièce ou à
+  // côté (on le voit par la cage). Les lumières, elles, ne viennent que de son étage, sauf dans
+  // l'escalier même (les bougies d'un autre étage éclaireraient à travers le plancher).
+  updateFloors(eye) {
+    const map = this.map, f = floorAt(map, eye.x), lx = eye.x - map.floors[f].ox;
+    const room = map.roomIdx[Math.floor(eye.y) * map.w + Math.floor(eye.x)];
+    const shown = this.shown;
+    shown.clear();
+    shown.add(f);
+    for (const s of map.stairs) {
+      if (s.f !== f && s.f + 1 !== f) continue;
+      const near = lx > s.x - 6 && lx < s.x + s.len + 6 && eye.y > s.y - 6 && eye.y < s.y + s.wid + 6;
+      if (near || (room >= 0 && room === map.roomIdx[s.y * map.w + map.floors[f].ox + s.x])) shown.add(s.f === f ? f + 1 : s.f);
+    }
+    this.levels.forEach((l, i) => { l.group.visible = l.depth.visible = shown.has(i); });
+    const st = stairAt(map, eye.x, eye.y);
+    this.eyeFloor = f;
+    this.lit = st ? [st.s.f, st.s.f + 1] : [f];
+    this.eyeLX = lx;
   }
 
   // Quand les images tombent sous ~40 par seconde pendant quelques secondes : d'abord plus de
@@ -1580,6 +1781,7 @@ export class Renderer {
     this.lastT = t;
     this.adapt();
     const eye = G.view, owner = eye.who, ghost = G.me?.state === 'dead';
+    this.updateFloors(eye);
     this.updateCamera(G, eye, dt);
     this.setGhostView(ghost);
     const lampOn = this.updateViewmodel(G, eye, owner);
@@ -1637,7 +1839,7 @@ export class Renderer {
       sway = Math.sin(eye.bob * 2.6) * (eye.running ? 0.012 : 0.007);
     } else if (eye.state === 'dead') h += Math.sin(t * 1.6) * 0.06;
     else if (eye.state === 'down') roll = 0.3 + Math.sin(t * 1.3) * 0.04;
-    cam.position.set(eye.x, h, eye.y);
+    cam.position.set(this.sceneX(eye.x), this.ground(eye.x, eye.y) + h, eye.y);
     cam.rotation.set(eye.p, -eye.a - Math.PI / 2, roll + sway);
     if (G.shake > 0) {
       const s = G.shake;
@@ -1694,14 +1896,21 @@ export class Renderer {
   // Les lumières les plus proches occupent les places disponibles ; elles s'allument et s'éteignent
   // en douceur quand elles en changent.
   updateLights(G, dt, eye) {
-    const t = G.time, map = this.map, cand = this.cand;
+    const t = G.time, map = this.map, cand = this.cand, lit = this.lit, ex = this.eyeLX;
+    // distance dans la scène (x dans l'étage f) ; la ligne de vue se juge sur la grille de cet étage
+    const dist = (x, y, f) => Math.hypot(x - ex, y - eye.y, (f - this.eyeFloor) * STOREY);
+    const add = (key, gx, y, h, color, power, range) => {
+      const f = floorAt(map, gx), x = gx - map.floors[f].ox, d = dist(x, y, f);
+      if (lit.includes(f) && d < 26) cand.push({ key, gx, x, y, h: f * STOREY + h, f, color, power, range, d });
+    };
     cand.length = 0;
     for (const l of this.statics) {
+      if (!this.shown.has(l.f)) continue;
       const out = (G.extinguished.get(l.i) || 0) > t;
       for (const f of l.flames) f.visible = !out;
       if (l.halo) l.halo.visible = !out;
       if (out) continue;
-      const d = Math.hypot(l.x - eye.x, l.y - eye.y);
+      const d = dist(l.x, l.y, l.f);
       if (d > 26) continue;
       const k = flicker(l, t);
       for (const f of l.flames) {
@@ -1712,22 +1921,14 @@ export class Renderer {
         l.halo.material.opacity = (l.k === 'pumpkin' ? 0.35 : 0.28) * k;
         l.halo.scale.setScalar(l.halo.userData.size * (0.9 + 0.15 * k));
       }
-      cand.push({ key: l, x: l.x, y: l.y, h: l.h, color: l.color, power: l.power * k, range: l.range, d });
+      if (lit.includes(l.f)) cand.push({ key: l, gx: l.gx, x: l.x, y: l.y, h: l.f * STOREY + l.h, f: l.f, color: l.color, power: l.power * k, range: l.range, d });
     }
     for (const it of G.items.values()) {
-      if (it.taken || it.type !== 'skull') continue;
-      const d = Math.hypot(it.x - eye.x, it.y - eye.y);
-      if (d < 26) cand.push({ key: 'k' + it.id, x: it.x, y: it.y, h: 0.5, color: GREEN, power: 1.6 + 0.4 * Math.sin(t * 3 + it.id), range: 3, d });
+      if (!it.taken && it.type === 'skull') add('k' + it.id, it.x, it.y, 0.5, GREEN, 1.6 + 0.4 * Math.sin(t * 3 + it.id), 3);
     }
-    for (const p of G.pings) {
-      const d = Math.hypot(p.x - eye.x, p.y - eye.y);
-      cand.push({ key: `p${p.x},${p.y}`, x: p.x, y: p.y, h: 1.2, color: PING, power: 3 * Math.min(1, p.t / 2), range: 4, d });
-    }
-    if (G.exitOpen) {
-      const ex = map.exit, x = ex.x + ex.w / 2, y = ex.y + 0.2;
-      cand.push({ key: 'exit', x, y, h: 1.6, color: OUTSIDE, power: 9 * Math.min(1, this.exitAngle), range: 8, d: Math.hypot(x - eye.x, y - eye.y) });
-    }
-    for (const c of cand) c.score = c.d - c.range * 0.4 + (lineOfSight(map, eye.x, eye.y, c.x, c.y) ? 0 : 5);
+    for (const p of G.pings) add(`p${p.x},${p.y}`, p.x, p.y, 1.2, PING, 3 * Math.min(1, p.t / 2), 4);
+    if (G.exitOpen) add('exit', map.exit.x + map.exit.w / 2, map.exit.y + 0.2, 1.6, OUTSIDE, 9 * Math.min(1, this.exitAngle), 8);
+    for (const c of cand) c.score = c.d - c.range * 0.4 + (lineOfSight(map, ex + map.floors[c.f].ox, eye.y, c.gx, c.y) ? 0 : 5);
     cand.sort((a, b) => a.score - b.score);
     const want = SLOTS - 2; // deux places restent libres pour celles qui s'éteignent
     const active = [];
@@ -1754,11 +1955,12 @@ export class Renderer {
       const r = this.rig(p);
       const body = p !== owner && (p.state === 'alive' || p.state === 'down');
       const spirit = p !== owner && p.state === 'dead' && ghost;
-      r.root.visible = body || spirit;
+      const f = floorAt(this.map, p.x);
+      r.root.visible = (body || spirit) && this.shown.has(f);
       r.body.visible = r.blood.visible = body;
       r.ghost.visible = spirit;
       if (!r.root.visible) continue;
-      r.root.position.set(p.x, 0, p.y);
+      r.root.position.set(this.sceneX(p.x), this.ground(p.x, p.y), p.y);
       r.root.rotation.y = -p.a;
       if (spirit) r.ghost.position.y = 0.25 + Math.sin(t * 2 + p.id) * 0.08;
       const down = p.state === 'down';
@@ -1773,7 +1975,8 @@ export class Renderer {
         r.beam.material.uniforms.opacity.value = 0.08 * k;
         r.lampGlow.material.opacity = 0.9 * k;
         r.lens.emissive.setRGB(k * 2.5, k * 2.3, k * 2);
-        lit.push({ p, r, k, d: Math.hypot(p.x - eye.x, p.y - eye.y) });
+        // sa lampe n'éclaire la scène que depuis l'étage de celui qui regarde (pas à travers un plancher)
+        if (this.lit.includes(f)) lit.push({ p, r, k, d: levelDist(this.map, eye.x, eye.y, p.x, p.y) });
       }
     }
     lit.sort((a, b) => a.d - b.d);
@@ -1849,8 +2052,9 @@ export class Renderer {
     this.monsterRigs(G.monsters.length);
     this.mrigs.forEach((r, i) => {
       const m = G.monsters[i];
-      r.root.visible = !!m;
-      if (!m) return;
+      // un fantôme la voit à travers les murs, et à travers les planchers
+      r.root.visible = !!m && (ghost || this.shown.has(floorAt(this.map, m.x)));
+      if (!r.root.visible) return;
       if (r.xray !== ghost) {
         // les fantômes voient la créature à travers les murs (sans changer ses shaders : les recompiler
         // figeait le jeu au moment de la mort)
@@ -1864,7 +2068,7 @@ export class Renderer {
       }
       const asleep = m.state === 0, chase = m.state === 4, flee = m.state === 5;
       const shake = flee || m.lit ? 0.04 : 0;
-      r.root.position.set(m.x + (Math.random() - 0.5) * shake, 0, m.y + (Math.random() - 0.5) * shake);
+      r.root.position.set(this.sceneX(m.x) + (Math.random() - 0.5) * shake, this.ground(m.x, m.y), m.y + (Math.random() - 0.5) * shake);
       r.root.rotation.y = -m.a;
       r.body.scale.set(1, asleep ? 0.62 : 1 + Math.sin(t * 2.3) * 0.015, 1);
       r.body.rotation.z = asleep ? -0.35 : chase ? -0.22 : -0.05;
@@ -1901,7 +2105,7 @@ export class Renderer {
         sp.scale.setScalar(1.5 + Math.sin(t * 0.9 + ph) * 0.3);
         sp.material.opacity = asleep ? 0.3 : 0.55;
       }
-      const d = Math.hypot(m.x - eye.x, m.y - eye.y);
+      const d = levelDist(this.map, eye.x, eye.y, m.x, m.y);
       // vue d'un fantôme, sa lueur rouge compense la brume : elle se voit de loin
       if (ghost) for (const mt of r.tint) mt.emissiveIntensity = 1 / Math.max(0.15, Math.exp(-((this.fog.density * d) ** 2)));
       let a = asleep || flee ? 0 : Math.max(0, 1 - d / 9) * (chase ? 1 : 0.6) * (0.75 + 0.25 * Math.sin(t * 7));
@@ -1916,14 +2120,14 @@ export class Renderer {
     const t = G.time;
     for (const it of G.items.values()) {
       const o = this.item(it);
-      o.visible = !it.taken;
+      o.visible = !it.taken && this.shown.has(floorAt(this.map, it.x));
       if (!o.visible) continue;
       if (it.type === 'skull') {
         const y = 0.42 + Math.sin(t * 2 + it.id) * 0.05;
         for (const p of o.userData.parts) p.position.y = y;
         // le crâne se tourne vers celui qui regarde et lève un peu la face vers lui
-        const sk = o.userData.parts[0], dx = this.camera.position.x - it.x, dz = this.camera.position.z - it.y;
-        sk.rotation.set(-Math.min(0.7, Math.atan2(this.camera.position.y - y, Math.hypot(dx, dz))) * 0.8, Math.atan2(dx, dz) + Math.sin(t * 0.8 + it.id) * 0.4, 0, 'YXZ');
+        const sk = o.userData.parts[0], dx = this.camera.position.x - o.position.x, dz = this.camera.position.z - it.y;
+        sk.rotation.set(-Math.min(0.7, Math.atan2(this.camera.position.y - o.position.y - y, Math.hypot(dx, dz))) * 0.8, Math.atan2(dx, dz) + Math.sin(t * 0.8 + it.id) * 0.4, 0, 'YXZ');
         o.userData.parts[1].material.opacity = 0.32 + 0.12 * Math.sin(t * 3 + it.id);
       } else {
         o.userData.inner.rotation.y = t * 0.8 + it.id;
@@ -1939,7 +2143,7 @@ export class Renderer {
       o.visible = !!p;
       if (!p) return;
       const a = Math.min(1, p.t / 2), cyc = ((6 - p.t) % 1.5) / 1.5;
-      o.position.set(p.x, 0, p.y);
+      o.position.set(this.sceneX(p.x), this.ground(p.x, p.y), p.y);
       o.userData.col.material.opacity = 0.35 * a;
       o.userData.ring.material.opacity = a * (1 - cyc);
       o.userData.ring.scale.setScalar(0.6 + cyc * 1.6);
@@ -1965,7 +2169,7 @@ export class Renderer {
     const wrap = (v, base, size) => base + ((((v - base) % size) + size) % size);
     for (let i = 0; i < seed.length; i++) {
       const s = seed[i];
-      const x = wrap(s[0] + s[3] * t, cam.x - 4, 8), y = wrap(s[1] + s[4] * t, 0, WALL_H), z = wrap(s[2] + s[5] * t, cam.z - 4, 8);
+      const x = wrap(s[0] + s[3] * t, cam.x - 4, 8), y = wrap(s[1] + s[4] * t, cam.y - EYE.alive, WALL_H), z = wrap(s[2] + s[5] * t, cam.z - 4, 8);
       pos[i * 3] = x;
       pos[i * 3 + 1] = y;
       pos[i * 3 + 2] = z;
