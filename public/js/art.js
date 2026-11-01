@@ -1,11 +1,13 @@
-// Dessins procéduraux (aucun fichier image) : le plan du manoir vu de dessus, qui sert aussi de
-// texture au sol et au dessus des meubles, puis les textures des murs, des meubles, des décors et des effets.
+// Dessins procéduraux : le plan du manoir vu de dessus, qui sert aussi de motif au sol et au dessus
+// des meubles, puis les motifs des murs, des meubles, des décors et des effets. Les matières
+// photographiées (materials.js) leur ajoutent ensuite grain, relief et rugosité.
 import { TILE } from '/shared/config.js';
 import { tileAt } from '/shared/physics.js';
 import { mulberry32 } from '/shared/map.js';
 
 export const TS = 48; // pixels par case du plan
-export const PX = 128; // pixels par mètre des textures de murs et de meubles (une case = un mètre)
+export const PX = 128; // unités de dessin par mètre des murs et des meubles (une case = un mètre)
+const RES = 2; // pixels par unité de dessin des murs et des meubles
 export const TAU = Math.PI * 2;
 export const FONT = '"IM Fell English", Georgia, serif';
 export const TITLE = 'Creepster, "IM Fell English", Georgia, serif';
@@ -47,11 +49,55 @@ export function circle(c, x, y, r, color) {
   c.fill();
 }
 
-function canvas(w, h) {
+// `read` : toile relue pixel par pixel (getImageData), dessinée alors en mémoire plutôt que par la carte graphique.
+function canvas(w, h, read = false) {
   const cv = document.createElement('canvas');
   cv.width = Math.max(1, Math.round(w));
   cv.height = Math.max(1, Math.round(h));
-  return [cv, cv.getContext('2d')];
+  return [cv, cv.getContext('2d', { willReadFrequently: read })];
+}
+
+// Toile `s` fois plus fine que les coordonnées de dessin w × h.
+function fine(w, h, s) {
+  const [cv, c] = canvas(w * s, h * s);
+  c.scale(cv.width / w, cv.height / h);
+  return [cv, c];
+}
+
+// Relief d'un motif : sa luminosité, adoucie, sert de hauteur (les traits sombres sont des creux,
+// les ornements clairs des bosses). Renvoie une toile de normales (convention OpenGL).
+export function normalFromCanvas(cv, strength = 3, blur = 2) {
+  const w = cv.width, h = cv.height, n = w * h;
+  const src = cv.getContext('2d').getImageData(0, 0, w, h).data;
+  let H = new Float32Array(n), T = new Float32Array(n);
+  for (let i = 0; i < n; i++) H[i] = ((src[i * 4] * 0.299 + src[i * 4 + 1] * 0.587 + src[i * 4 + 2] * 0.114) / 255) * (src[i * 4 + 3] / 255);
+  for (let k = 0; k < blur; k++) {
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      T[i] = (H[i] * 2 + H[y * w + Math.max(0, x - 1)] + H[y * w + Math.min(w - 1, x + 1)]) / 4;
+    }
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      H[i] = (T[i] * 2 + T[Math.max(0, y - 1) * w + x] + T[Math.min(h - 1, y + 1) * w + x]) / 4;
+    }
+  }
+  const [out, c] = canvas(w, h);
+  const img = c.createImageData(w, h), d = img.data;
+  for (let y = 0; y < h; y++) {
+    const y0 = Math.max(0, y - 1) * w, y1 = Math.min(h - 1, y + 1) * w;
+    for (let x = 0; x < w; x++) {
+      const dx = H[y * w + Math.min(w - 1, x + 1)] - H[y * w + Math.max(0, x - 1)];
+      const dy = H[y1 + x] - H[y0 + x];
+      const nx = -dx * strength, ny = dy * strength, len = Math.hypot(nx, ny, 1);
+      const i = (y * w + x) * 4;
+      d[i] = (nx / len * 0.5 + 0.5) * 255;
+      d[i + 1] = (ny / len * 0.5 + 0.5) * 255;
+      d[i + 2] = (1 / len * 0.5 + 0.5) * 255;
+      d[i + 3] = 255;
+    }
+  }
+  c.putImageData(img, 0, 0);
+  return out;
 }
 
 function hash(s) {
@@ -554,11 +600,11 @@ function drawDecal(c, d, rnd) {
     case 'bones': {
       c.translate(x, y);
       c.rotate(d.r);
-      c.strokeStyle = '#d8d0bc';
+      c.strokeStyle = '#8f846e';
       c.lineWidth = 3;
       c.lineCap = 'round';
       c.beginPath(); c.moveTo(-9, 0); c.lineTo(9, 0); c.moveTo(-4, -6); c.lineTo(6, 7); c.stroke();
-      for (const [bx, by] of [[-9, 0], [9, 0], [-4, -6], [6, 7]]) circle(c, bx, by, 2.5, '#d8d0bc');
+      for (const [bx, by] of [[-9, 0], [9, 0], [-4, -6], [6, 7]]) circle(c, bx, by, 2.5, '#8f846e');
       break;
     }
     case 'chair':
@@ -632,8 +678,17 @@ function drawExitDoor(c, ex) {
   c.fillRect(x + w / 2 - 1, y + 4, 2, h - 8);
 }
 
+// Teinte moyenne de deux couleurs.
+export function blend(a, b) {
+  const p = s => parseInt(s.slice(1), 16), x = p(a), y = p(b);
+  const m = sh => Math.round((((x >> sh) & 255) + ((y >> sh) & 255)) / 2);
+  return `#${((m(16) << 16) | (m(8) << 8) | m(0)).toString(16).padStart(6, '0')}`;
+}
+
 // Le plan complet, `k` fois plus fin que TS pixels par case (sol, tapis, taches, dessus des meubles).
-export function buildPlan(map, k = 1) {
+// `flat` : version posée sur le sol en 3D, d'une teinte unie par pièce (la matière photographiée y
+// dessine carreaux et lattes) et sans les tapis, qui ont leur propre volume.
+export function buildPlan(map, k = 1, flat = false) {
   const [cv, c] = canvas(map.w * TS * k, map.h * TS * k);
   c.setTransform(k, 0, 0, k, 0, 0);
   const rnd = mulberry32(map.seed ^ 0x5eed);
@@ -642,9 +697,16 @@ export function buildPlan(map, k = 1) {
   c.fillRect(0, 0, map.w * TS, map.h * TS);
 
   for (let y = 0; y < map.h; y++) {
-    for (let x = 0; x < map.w; x++) if (!wallish(tileAt(map, x, y))) drawFloor(c, x * TS, y * TS, theme(x, y), rnd, x, y);
+    for (let x = 0; x < map.w; x++) {
+      if (wallish(tileAt(map, x, y))) continue;
+      const st = theme(x, y);
+      if (flat) {
+        c.fillStyle = blend(st.a, st.b);
+        c.fillRect(x * TS, y * TS, TS, TS);
+      } else drawFloor(c, x * TS, y * TS, st, rnd, x, y);
+    }
   }
-  for (const d of map.decals) if (d.k === 'rug' || d.k === 'runner' || d.k === 'circle') drawDecal(c, d, rnd);
+  for (const d of map.decals) if (d.k === 'circle' || (!flat && (d.k === 'rug' || d.k === 'runner'))) drawDecal(c, d, rnd);
   for (const d of map.decals) if (d.k !== 'rug' && d.k !== 'runner' && d.k !== 'circle' && d.k !== 'web') drawDecal(c, d, rnd);
 
   // Pied des murs plus sombre
@@ -757,23 +819,23 @@ function paperWall(c, W, H, st, theme) {
   c.fillRect(0, Y(0.14), W, 2);
 }
 
+// Mur de pierre : la photographie dessine les blocs ; ici la teinte, l'humidité qui remonte et la mousse.
 function stoneWall(c, W, H, st, rnd) {
-  c.fillStyle = '#100e12';
+  c.fillStyle = blend(st.wall, '#4a4642');
   c.fillRect(0, 0, W, H);
-  const bh = 30;
-  for (let y = H, row = 0; y > 0; y -= bh, row++) {
-    for (let x = row % 2 ? -32 : 0; x < W; x += 64) {
-      c.fillStyle = shade(st.wall, (rnd() - 0.5) * 0.35);
-      c.fillRect(x + 2, y - bh + 2, 60, bh - 4);
-      c.fillStyle = 'rgba(255,255,255,0.05)';
-      c.fillRect(x + 2, y - bh + 2, 60, 2);
-      c.fillStyle = 'rgba(0,0,0,0.2)';
-      c.fillRect(x + 2, y - 5, 60, 3);
-      if (rnd() < 0.15) {
-        c.fillStyle = 'rgba(60,90,40,0.25)';
-        c.beginPath(); c.ellipse(x + rnd() * 60, y - bh * 0.3, 10 + rnd() * 10, 4, 0, 0, TAU); c.fill();
-      }
-    }
+  const g = c.createLinearGradient(0, H * 0.5, 0, H);
+  g.addColorStop(0, 'rgba(8,12,6,0)');
+  g.addColorStop(1, 'rgba(8,12,6,0.5)');
+  c.fillStyle = g;
+  c.fillRect(0, 0, W, H);
+  for (let i = 0; i < 3; i++) {
+    if (rnd() < 0.5) continue;
+    const x = rnd() * W, y = H * (0.55 + rnd() * 0.4), r = 12 + rnd() * 26;
+    const m = c.createRadialGradient(x, y, 0, x, y, r);
+    m.addColorStop(0, 'rgba(50,80,30,0.35)');
+    m.addColorStop(1, 'rgba(50,80,30,0)');
+    c.fillStyle = m;
+    c.fillRect(x - r, y - r, r * 2, r * 2);
   }
 }
 
@@ -820,98 +882,38 @@ function grime(c, W, H, rnd, v) {
 }
 
 // Murs d'une pièce : trois variantes côte à côte, chacune large d'une case et haute du sol au plafond.
+// Renvoie le motif et son relief, pris avant les salissures (qui n'en ont pas).
 export function wallAtlas(theme, height) {
   const st = STYLE[theme] || STYLE.foyer;
   const W = PX, H = Math.round(PX * height);
-  const [cv, c] = canvas(W * 3, H);
+  const [cv, c] = fine(W * 3, H, RES);
   const rnd = mulberry32(hash(theme));
-  for (let v = 0; v < 3; v++) {
-    c.save();
-    c.translate(v * W, 0);
-    c.beginPath();
-    c.rect(0, 0, W, H);
-    c.clip();
-    if (theme === 'crypt' || theme === 'chapel') stoneWall(c, W, H, st, rnd); else paperWall(c, W, H, st, theme);
-    grime(c, W, H, rnd, v);
-    c.restore();
-  }
-  return cv;
-}
-
-export function ceilingTexture() {
-  const [cv, c] = canvas(PX, PX);
-  const rnd = mulberry32(77);
-  c.fillStyle = '#2a2224';
-  c.fillRect(0, 0, PX, PX);
-  for (let i = 0; i < 400; i++) {
-    c.fillStyle = rnd() < 0.5 ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.04)';
-    c.fillRect(rnd() * PX, rnd() * PX, 2, 2);
-  }
-  c.strokeStyle = 'rgba(0,0,0,0.35)';
-  c.lineWidth = 1;
-  c.beginPath();
-  let x = rnd() * PX, y = 0;
-  c.moveTo(x, y);
-  while (y < PX) { x += (rnd() - 0.5) * 20; y += 8 + rnd() * 12; c.lineTo(x, y); }
-  c.stroke();
-  return cv;
+  const stone = theme === 'crypt' || theme === 'chapel';
+  const each = draw => {
+    for (let v = 0; v < 3; v++) {
+      c.save();
+      c.translate(v * W, 0);
+      c.beginPath();
+      c.rect(0, 0, W, H);
+      c.clip();
+      draw(v);
+      c.restore();
+    }
+  };
+  each(() => (stone ? stoneWall(c, W, H, st, rnd) : paperWall(c, W, H, st, theme)));
+  const bump = stone ? null : normalFromCanvas(cv, 3, 2);
+  each(v => grime(c, W, H, rnd, v));
+  return { color: cv, bump };
 }
 
 // ---------------------------------------------------------------------------
-// Matières (motifs d'un mètre qui se répètent) et côtés des meubles
+// Côtés des meubles
 // ---------------------------------------------------------------------------
 
-function grain(c, W, H, rnd, col, n) {
-  c.strokeStyle = col;
-  c.lineWidth = 1;
-  for (let i = 0; i < n; i++) {
-    const y = rnd() * H, ph = rnd() * 6;
-    c.beginPath();
-    c.moveTo(0, y);
-    for (let x = 0; x <= W; x += 16) c.lineTo(x, y + Math.sin(x * 0.05 + ph) * 3);
-    c.stroke();
-  }
-}
-
-export const MATTERS = {
-  wood(c, W, H, rnd) {
-    c.fillStyle = '#3e2718';
-    c.fillRect(0, 0, W, H);
-    for (let y = 0; y < H; y += 32) {
-      c.fillStyle = shade('#3e2718', (rnd() - 0.5) * 0.2);
-      c.fillRect(0, y, W, 31);
-    }
-    grain(c, W, H, rnd, 'rgba(0,0,0,0.25)', 22);
-  },
-  stone(c, W, H, rnd) {
-    c.fillStyle = '#2a2a2e';
-    c.fillRect(0, 0, W, H);
-    for (let y = 0, row = 0; y < H; y += 32, row++) {
-      for (let x = row % 2 ? -32 : 0; x < W; x += 64) {
-        c.fillStyle = shade('#5c5b60', (rnd() - 0.5) * 0.3);
-        c.fillRect(x + 1.5, y + 1.5, 61, 29);
-      }
-    }
-    for (let i = 0; i < 300; i++) {
-      c.fillStyle = 'rgba(0,0,0,0.12)';
-      c.fillRect(rnd() * W, rnd() * H, 2, 2);
-    }
-  },
-  velvet(c, W, H, rnd) {
-    c.fillStyle = '#5a1424';
-    c.fillRect(0, 0, W, H);
-    for (let i = 0; i < 600; i++) {
-      c.fillStyle = rnd() < 0.5 ? 'rgba(0,0,0,0.08)' : 'rgba(255,200,200,0.04)';
-      c.fillRect(rnd() * W, rnd() * H, 3, 3);
-    }
-    for (let y = 16; y < H; y += 32) for (let x = (y / 32) % 2 ? 0 : 16; x < W; x += 32) circle(c, x, y, 2, 'rgba(0,0,0,0.35)');
-  },
-};
-
-export function matterTexture(kind) {
-  const [cv, c] = canvas(PX, PX);
-  MATTERS[kind](c, PX, PX, mulberry32(hash(kind)));
-  return cv;
+// Fond uni des côtés en pierre : la photographie y met le grain et les joints.
+function stoneBase(c, W, H) {
+  c.fillStyle = '#4c4a48';
+  c.fillRect(0, 0, W, H);
 }
 
 function doorPanel(c, x, y, w, h, base) {
@@ -941,18 +943,6 @@ function shelves(c, W, H, rnd, step, item) {
 }
 
 const SIDES = {
-  books(c, W, H, rnd) {
-    shelves(c, W, H, rnd, 0.44 * PX, (c, x, base, step, rnd) => {
-      const bw = Math.min(5 + rnd() * 10, W - 7 - x), bh = step * (0.5 + rnd() * 0.38);
-      if (rnd() < 0.07) return x + 10 + rnd() * 14;
-      c.fillStyle = shade(BOOKS[Math.floor(rnd() * BOOKS.length)], (rnd() - 0.5) * 0.35);
-      c.fillRect(x, base - bh, bw - 1, bh);
-      c.fillStyle = 'rgba(210,170,80,0.4)';
-      c.fillRect(x + 1, base - bh * 0.8, Math.max(1, bw - 3), 2);
-      c.fillRect(x + 1, base - bh * 0.3, Math.max(1, bw - 3), 1);
-      return x + bw;
-    });
-  },
   potions(c, W, H, rnd) {
     shelves(c, W, H, rnd, 0.4 * PX, (c, x, base, step, rnd) => {
       const r = 4 + rnd() * 6;
@@ -1064,8 +1054,47 @@ const SIDES = {
       c.fillRect(0, H * y - 5, W, 2);
     }
   },
+  // flanc de sarcophage : moulures, panneau creusé orné d'une croix, lettres effacées
+  tomb(c, W, H) {
+    stoneBase(c, W, H);
+    const groove = (x, y, w, h, t) => {
+      c.fillStyle = 'rgba(0,0,0,0.55)';
+      c.fillRect(x, y, w, t);
+      c.fillRect(x, y, t, h);
+      c.fillStyle = 'rgba(255,255,255,0.18)';
+      c.fillRect(x, y + h - t, w, t);
+      c.fillRect(x + w - t, y, t, h);
+    };
+    c.fillStyle = 'rgba(255,255,255,0.12)';
+    c.fillRect(0, 0, W, 8);
+    c.fillStyle = 'rgba(0,0,0,0.4)';
+    c.fillRect(0, 8, W, 3);
+    c.fillRect(0, H - 14, W, 3);
+    groove(10, 18, W - 20, H - 40, 3);
+    groove(18, 26, W - 36, H - 56, 2);
+    c.fillStyle = 'rgba(0,0,0,0.5)';
+    c.fillRect(W / 2 - 3, 34, 6, H - 76);
+    c.fillRect(W / 2 - 18, 46, 36, 6);
+    c.fillStyle = 'rgba(255,255,255,0.15)';
+    c.fillRect(W / 2 + 3, 34, 2, H - 76);
+    c.fillRect(W / 2 - 18, 52, 36, 2);
+    // salissures : terre remontée du sol, coulures
+    const g = c.createLinearGradient(0, H * 0.45, 0, H);
+    g.addColorStop(0, 'rgba(20,16,10,0)');
+    g.addColorStop(1, 'rgba(20,16,10,0.55)');
+    c.fillStyle = g;
+    c.fillRect(0, 0, W, H);
+    for (let i = 0; i < 6; i++) {
+      const x = 8 + ((i * 37) % (W - 16));
+      const d = c.createLinearGradient(0, 10, 0, 10 + H * 0.5);
+      d.addColorStop(0, 'rgba(15,12,8,0.3)');
+      d.addColorStop(1, 'rgba(15,12,8,0)');
+      c.fillStyle = d;
+      c.fillRect(x, 10, 3 + (i % 3) * 2, H * 0.5);
+    }
+  },
   altar(c, W, H, rnd) {
-    MATTERS.stone(c, W, H, rnd);
+    stoneBase(c, W, H);
     c.fillStyle = '#6a1020';
     c.fillRect(W * 0.18, 0, W * 0.64, H * 0.8);
     c.fillStyle = '#c9a040';
@@ -1098,7 +1127,7 @@ const SIDES = {
     circle(c, W / 2, H * 0.72, 10, '#b08a3a');
   },
   fireplace(c, W, H, rnd) {
-    MATTERS.stone(c, W, H, rnd);
+    stoneBase(c, W, H);
     c.fillStyle = '#080404';
     c.beginPath();
     c.moveTo(W * 0.14, H);
@@ -1153,8 +1182,8 @@ const SIDES = {
 
 // Côté d'un meuble : un mètre de large, toute sa hauteur `h` (en mètres).
 export function sideTexture(kind, h) {
-  const [cv, c] = canvas(PX, PX * h);
-  SIDES[kind](c, cv.width, cv.height, mulberry32(hash(kind)));
+  const [cv, c] = fine(PX, PX * h, RES);
+  SIDES[kind](c, PX, PX * h, mulberry32(hash(kind)));
   return cv;
 }
 
@@ -1163,7 +1192,7 @@ export function sideTexture(kind, h) {
 // ---------------------------------------------------------------------------
 
 export function windowTexture(moon) {
-  const [cv, c] = canvas(96, 176);
+  const [cv, c] = fine(96, 176, 3);
   const g = c.createLinearGradient(0, 0, 0, 176);
   g.addColorStop(0, '#2a3a6a');
   g.addColorStop(1, '#0a1028');
@@ -1198,7 +1227,7 @@ export function windowTexture(moon) {
 }
 
 export function paintingTexture(v) {
-  const [cv, c] = canvas(80, 100);
+  const [cv, c] = fine(80, 100, 5);
   c.fillStyle = '#8a6a2a';
   c.fillRect(0, 0, 80, 100);
   c.fillStyle = '#5a4418';
@@ -1254,14 +1283,47 @@ export function paintingTexture(v) {
     }
     c.stroke();
   }
-  // vernis craquelé
-  c.fillStyle = 'rgba(200,170,90,0.07)';
+  // touches de pinceau qui reprennent les couleurs du tableau, craquelures, vernis jauni et noirci aux bords
+  const rnd = mulberry32(v * 31 + 7), S = cv.width / 80;
+  const img = c.getImageData(10 * S, 10 * S, 60 * S, 80 * S), data = img.data;
+  const at = (x, y) => {
+    const i = (Math.min(img.height - 1, Math.floor(y * S)) * img.width + Math.min(img.width - 1, Math.floor(x * S))) * 4;
+    return `rgba(${data[i]},${data[i + 1]},${data[i + 2]},0.55)`;
+  };
+  c.save();
+  c.beginPath();
+  c.rect(10, 10, 60, 80);
+  c.clip();
+  c.lineCap = 'round';
+  for (let i = 0; i < 1400; i++) {
+    const x = rnd() * 60, y = rnd() * 80, a = Math.sin(x * 0.15 + y * 0.05) * 1.2 + rnd() * 0.6, len = 0.8 + rnd() * 2.6;
+    c.strokeStyle = at(x, y);
+    c.lineWidth = 0.4 + rnd() * 0.9;
+    c.beginPath();
+    c.moveTo(10 + x, 10 + y);
+    c.lineTo(10 + x + Math.cos(a) * len, 10 + y + Math.sin(a) * len);
+    c.stroke();
+  }
+  c.strokeStyle = 'rgba(10,6,2,0.35)';
+  c.lineWidth = 0.18;
+  for (let i = 0; i < 70; i++) {
+    let x = 10 + rnd() * 60, y = 10 + rnd() * 80;
+    c.beginPath();
+    c.moveTo(x, y);
+    for (let k = 0; k < 5; k++) c.lineTo((x += (rnd() - 0.5) * 7), (y += (rnd() - 0.5) * 7));
+    c.stroke();
+  }
+  const g = c.createRadialGradient(40, 50, 8, 40, 50, 52);
+  g.addColorStop(0, 'rgba(210,170,80,0.10)');
+  g.addColorStop(1, 'rgba(25,14,4,0.6)');
+  c.fillStyle = g;
   c.fillRect(10, 10, 60, 80);
+  c.restore();
   return cv;
 }
 
 export function mirrorTexture() {
-  const [cv, c] = canvas(80, 104);
+  const [cv, c] = fine(80, 104, 4);
   c.fillStyle = '#9a9aa4';
   c.beginPath(); c.ellipse(40, 52, 38, 50, 0, 0, TAU); c.fill();
   const g = c.createLinearGradient(0, 0, 80, 104);
@@ -1280,7 +1342,7 @@ export function mirrorTexture() {
 }
 
 export function tornTexture(rnd = mulberry32(5)) {
-  const [cv, c] = canvas(96, 128);
+  const [cv, c] = fine(96, 128, 3);
   c.fillStyle = 'rgba(10,6,8,0.6)';
   c.beginPath();
   c.moveTo(10 + rnd() * 10, 14);
@@ -1295,9 +1357,9 @@ export function tornTexture(rnd = mulberry32(5)) {
 
 // Toile d'araignée tissée depuis le coin inférieur gauche.
 export function webTexture() {
-  const [cv, c] = canvas(128, 128);
+  const [cv, c] = fine(128, 128, 4);
   c.strokeStyle = 'rgba(225,225,235,0.75)';
-  c.lineWidth = 1.2;
+  c.lineWidth = 0.6;
   const ox = 0, oy = 128;
   for (let i = 0; i <= 6; i++) {
     const a = (i / 6) * (Math.PI / 2);
@@ -1315,12 +1377,141 @@ export function webTexture() {
   return cv;
 }
 
+// Tapis d'Orient de `d.w` × `d.h` mètres : champ semé de rosaces, médaillon lobé, écoinçons, bordures
+// à frises, laine nouée (grain), usure et franges.
+export function rugTexture(d) {
+  const P = 160, W = d.w * P, H = d.h * P;
+  const [cv, c] = canvas(W, H, true);
+  const rnd = mulberry32(hash(`${d.c}${d.x},${d.y}`));
+  const dark = shade(d.c, -0.5), deep = shade(d.c, -0.28), ivory = blend(shade(d.c, 0.3), '#8a7656'), gold = blend(d.c, '#7a5a2a');
+  const diamond = (x, y, r) => { c.beginPath(); c.moveTo(x, y - r); c.lineTo(x + r, y); c.lineTo(x, y + r); c.lineTo(x - r, y); c.closePath(); c.fill(); };
+  const rosette = (x, y, r, n, col, core) => {
+    c.fillStyle = col;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * TAU;
+      c.beginPath();
+      c.ellipse(x + Math.cos(a) * r * 0.55, y + Math.sin(a) * r * 0.55, r * 0.45, r * 0.2, a, 0, TAU);
+      c.fill();
+    }
+    circle(c, x, y, r * 0.25, core);
+  };
+  const lobed = (x, y, rx, ry, n, col) => {
+    c.fillStyle = col;
+    c.beginPath();
+    for (let i = 0; i <= n * 8; i++) {
+      const a = (i / (n * 8)) * TAU, k = 1 + 0.12 * Math.cos(a * n);
+      c.lineTo(x + Math.cos(a) * rx * k, y + Math.sin(a) * ry * k);
+    }
+    c.fill();
+  };
+  c.fillStyle = d.c;
+  c.fillRect(0, 0, W, H);
+  // champ : treillis de rosaces et de losanges
+  for (let y = 0, row = 0; y < H + 16; y += 16, row++) {
+    for (let x = row % 2 ? 8 : 0; x < W + 16; x += 16) {
+      if ((row + Math.round(x / 16)) % 2) rosette(x, y, 5, 8, deep, gold);
+      else { c.fillStyle = dark; diamond(x, y, 2.5); }
+    }
+  }
+  const fr = 10, b = Math.min(W, H) * 0.14, inner = fr + b;
+  // médaillon et écoinçons
+  const cx = W / 2, cy = H / 2, r = Math.min(W, H) * 0.24, ex = Math.max(1, W / H) * 0.8 + 0.2, ey = Math.max(1, H / W) * 0.8 + 0.2;
+  lobed(cx, cy, r * ex * 1.08, r * ey * 1.08, 8, gold);
+  lobed(cx, cy, r * ex, r * ey, 8, dark);
+  lobed(cx, cy, r * ex * 0.62, r * ey * 0.62, 8, deep);
+  rosette(cx, cy, r * 0.22, 12, gold, ivory);
+  for (const [qx, qy] of [[inner, inner], [W - inner, inner], [inner, H - inner], [W - inner, H - inner]]) {
+    c.fillStyle = dark;
+    c.beginPath(); c.ellipse(qx, qy, r * 0.9, r * 0.9, 0, 0, TAU); c.fill();
+    rosette(qx + Math.sign(cx - qx) * r * 0.35, qy + Math.sign(cy - qy) * r * 0.35, r * 0.14, 8, gold, ivory);
+  }
+  // bordures : filets et frise de rosaces sur fond sombre
+  c.fillStyle = dark;
+  c.fillRect(fr, fr, W - 2 * fr, b);
+  c.fillRect(fr, H - fr - b, W - 2 * fr, b);
+  c.fillRect(fr, fr, b, H - 2 * fr);
+  c.fillRect(W - fr - b, fr, b, H - 2 * fr);
+  c.strokeStyle = ivory;
+  c.lineWidth = 2.5;
+  c.strokeRect(fr + 4, fr + 4, W - 2 * fr - 8, H - 2 * fr - 8);
+  c.strokeStyle = gold;
+  c.strokeRect(inner - 4, inner - 4, W - 2 * (inner - 4), H - 2 * (inner - 4));
+  for (let x = inner, i = 0; x < W - inner; x += 15, i++) {
+    rosette(x, fr + b / 2, b * 0.2, 6, i % 2 ? gold : deep, ivory);
+    rosette(x, H - fr - b / 2, b * 0.2, 6, i % 2 ? gold : deep, ivory);
+  }
+  for (let y = inner, i = 0; y < H - inner; y += 15, i++) {
+    rosette(fr + b / 2, y, b * 0.2, 6, i % 2 ? gold : deep, ivory);
+    rosette(W - fr - b / 2, y, b * 0.2, 6, i % 2 ? gold : deep, ivory);
+  }
+  // usure : laine écrasée et décolorée au passage, taches sombres
+  for (let i = 0; i < 30; i++) {
+    const x = rnd() * W, y = rnd() * H, rr = 12 + rnd() * 50;
+    const g = c.createRadialGradient(x, y, 0, x, y, rr);
+    const col = rnd() < 0.6 ? '150,130,105' : '8,4,2';
+    g.addColorStop(0, `rgba(${col},${(0.1 + rnd() * 0.12).toFixed(2)})`);
+    g.addColorStop(1, `rgba(${col},0)`);
+    c.fillStyle = g;
+    c.fillRect(x - rr, y - rr, rr * 2, rr * 2);
+  }
+  // laine : les motifs bavent un peu, puis le grain des nœuds
+  const [soft, sc] = canvas(cv.width, cv.height, true);
+  sc.filter = 'blur(1.3px)';
+  sc.drawImage(cv, 0, 0);
+  c.drawImage(soft, 0, 0);
+  const img = c.getImageData(0, 0, cv.width, cv.height), px = img.data;
+  for (let i = 0; i < px.length; i += 4) {
+    const n = (rnd() - 0.5) * 26 + (((i >> 2) % cv.width) % 3 === 0 ? -6 : 0);
+    px[i] += n;
+    px[i + 1] += n;
+    px[i + 2] += n;
+  }
+  c.putImageData(img, 0, 0);
+  // franges sur les petits côtés
+  c.strokeStyle = 'rgba(200,185,150,0.95)';
+  c.lineWidth = 1.5;
+  const fringe = W >= H;
+  for (let p = 2; p < (fringe ? H : W); p += 4) {
+    c.beginPath();
+    if (fringe) { c.moveTo(0, p); c.lineTo(fr, p); c.moveTo(W - fr, p); c.lineTo(W, p); } else { c.moveTo(p, 0); c.lineTo(p, fr); c.moveTo(p, H - fr); c.lineTo(p, H); }
+    c.stroke();
+  }
+  return cv;
+}
+
+// Ce que projette une vraie lampe torche : un point chaud, l'anneau plus vif du réflecteur, un halo
+// plus faible qui s'éteint au bord, et les petits défauts du verre. Intensités linéaires (la texture
+// n'est pas convertie), un peu plus chaudes vers le bord.
+export function flashlightCookie() {
+  const S = 256, m = S / 2;
+  const [cv, c] = canvas(S, S);
+  c.fillStyle = '#000';
+  c.fillRect(0, 0, S, S);
+  const g = c.createRadialGradient(m, m, 0, m, m, m);
+  for (const [t, v] of [[0, 0.95], [0.1, 0.93], [0.18, 0.74], [0.25, 1], [0.31, 0.62], [0.42, 0.4], [0.56, 0.27], [0.72, 0.15], [0.86, 0.06], [0.95, 0.015], [1, 0]]) {
+    g.addColorStop(t, `rgb(${Math.round(v * 255)},${Math.round(v * 247)},${Math.round(v * 232)})`);
+  }
+  c.fillStyle = g;
+  c.fillRect(0, 0, S, S);
+  const rnd = mulberry32(42);
+  for (let i = 0; i < 14; i++) {
+    const a = rnd() * TAU, d = rnd() * m * 0.6, r = 4 + rnd() * 14;
+    const x = m + Math.cos(a) * d, y = m + Math.sin(a) * d;
+    const s = c.createRadialGradient(x, y, 0, x, y, r);
+    s.addColorStop(0, `rgba(0,0,0,${(0.03 + rnd() * 0.05).toFixed(2)})`);
+    s.addColorStop(1, 'rgba(0,0,0,0)');
+    c.fillStyle = s;
+    c.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+  return cv;
+}
+
 // ---------------------------------------------------------------------------
 // Effets et personnages
 // ---------------------------------------------------------------------------
 
 export function glowTexture() {
-  const [cv, c] = canvas(64, 64);
+  const [cv, c] = fine(64, 64, 2);
   const g = c.createRadialGradient(32, 32, 0, 32, 32, 32);
   g.addColorStop(0, 'rgba(255,255,255,1)');
   g.addColorStop(0.25, 'rgba(255,255,255,0.45)');
@@ -1331,7 +1522,7 @@ export function glowTexture() {
 }
 
 export function smokeTexture() {
-  const [cv, c] = canvas(64, 64);
+  const [cv, c] = fine(64, 64, 2);
   const g = c.createRadialGradient(32, 32, 0, 32, 32, 32);
   g.addColorStop(0, 'rgba(2,0,4,0.95)');
   g.addColorStop(0.5, 'rgba(2,0,4,0.6)');
@@ -1342,7 +1533,7 @@ export function smokeTexture() {
 }
 
 export function flameTexture() {
-  const [cv, c] = canvas(32, 64);
+  const [cv, c] = fine(32, 64, 3);
   const g = c.createRadialGradient(16, 46, 1, 16, 40, 26);
   g.addColorStop(0, 'rgba(255,250,225,1)');
   g.addColorStop(0.3, 'rgba(255,200,90,0.9)');
@@ -1370,26 +1561,9 @@ export function beamTexture() {
   return cv;
 }
 
-export function skullTexture() {
-  const [cv, c] = canvas(128, 128);
-  c.translate(64, 62);
-  c.scale(52, 52);
-  c.fillStyle = '#e9e4d4';
-  c.beginPath(); c.arc(0, -0.15, 0.78, Math.PI * 0.8, Math.PI * 2.2); c.lineTo(0.42, 0.75); c.lineTo(-0.42, 0.75); c.closePath(); c.fill();
-  circle(c, -0.3, -0.05, 0.22, '#152015');
-  circle(c, 0.3, -0.05, 0.22, '#152015');
-  circle(c, -0.3, -0.05, 0.09, '#7dff9a');
-  circle(c, 0.3, -0.05, 0.09, '#7dff9a');
-  c.fillStyle = '#152015';
-  c.beginPath(); c.moveTo(0, 0.2); c.lineTo(-0.1, 0.38); c.lineTo(0.1, 0.38); c.closePath(); c.fill();
-  c.fillRect(-0.3, 0.55, 0.6, 0.06);
-  for (let i = -2; i <= 2; i++) c.fillRect(i * 0.12 - 0.02, 0.5, 0.04, 0.2);
-  return cv;
-}
-
 // Masque de porcelaine de la créature.
 export function maskTexture() {
-  const [cv, c] = canvas(128, 160);
+  const [cv, c] = fine(128, 160, 3);
   const g = c.createRadialGradient(64, 60, 10, 64, 80, 80);
   g.addColorStop(0, '#e2dacb');
   g.addColorStop(0.7, '#b8b0a2');
@@ -1442,7 +1616,7 @@ export function sealTexture() {
 
 // Ce qu'on voit par la grande porte ouverte : le parc sous la lune.
 export function nightTexture() {
-  const [cv, c] = canvas(512, 256);
+  const [cv, c] = fine(512, 256, 2);
   const g = c.createLinearGradient(0, 0, 0, 256);
   g.addColorStop(0, '#0c1430');
   g.addColorStop(0.65, '#2a3c6a');
@@ -1479,7 +1653,7 @@ export function nightTexture() {
 
 // Citrouille : écorce (texture) et visage sculpté qui brille (lumière propre).
 export function pumpkinTextures() {
-  const [cv, c] = canvas(256, 128);
+  const [cv, c] = fine(256, 128, 2);
   for (let x = 0; x < 256; x += 32) {
     const g = c.createLinearGradient(x, 0, x + 32, 0);
     g.addColorStop(0, '#7a3008');
@@ -1488,7 +1662,7 @@ export function pumpkinTextures() {
     c.fillStyle = g;
     c.fillRect(x, 0, 32, 128);
   }
-  const [ev, e] = canvas(256, 128);
+  const [ev, e] = fine(256, 128, 2);
   e.fillStyle = '#000';
   e.fillRect(0, 0, 256, 128);
   // visage centré en u = 0,5 (face +X de la sphère)
@@ -1507,34 +1681,142 @@ export function pumpkinTextures() {
 }
 
 export function bloodTexture() {
-  const [cv, c] = canvas(128, 128);
+  const [cv, c] = fine(128, 128, 2);
   splat(c, 64, 64, 30, mulberry32(3), 'rgba(90,0,8,0.85)');
   return cv;
 }
 
-// ---------------------------------------------------------------------------
-// Interface
-// ---------------------------------------------------------------------------
-
-export function grainCanvas() {
-  const [cv, c] = canvas(256, 256);
-  const img = c.createImageData(256, 256);
-  for (let i = 0; i < img.data.length; i += 4) {
-    const v = Math.random() * 255;
-    img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
-    img.data[i + 3] = 255;
+// Mèches de cheveux, de haut en bas et raccordables : nuances pour la couleur, relief pour la lumière.
+export function hairTexture() {
+  const W = 256, [cv, c] = canvas(W, W), rnd = mulberry32(77);
+  c.fillStyle = '#a8a8a8';
+  c.fillRect(0, 0, W, W);
+  for (let i = 0; i < 1100; i++) {
+    const x = rnd() * W, v = Math.floor(90 + rnd() * 165), bend = (rnd() - 0.5) * 10;
+    c.strokeStyle = `rgba(${v},${v},${v},${0.25 + rnd() * 0.45})`;
+    c.lineWidth = 0.5 + rnd() * 1.6;
+    for (const dx of [-W, 0, W]) {
+      c.beginPath();
+      c.moveTo(x + dx, -4);
+      c.bezierCurveTo(x + dx + bend, W * 0.33, x + dx - bend, W * 0.66, x + dx, W + 4);
+      c.stroke();
+    }
   }
-  c.putImageData(img, 0, 0);
   return cv;
 }
 
-export function vignetteCanvas(w, h, rgb, inner, alpha) {
-  const [cv, c] = canvas(w, h);
-  const r = Math.hypot(w, h) / 2;
-  const g = c.createRadialGradient(w / 2, h / 2, r * inner, w / 2, h / 2, r);
-  g.addColorStop(0, `rgba(${rgb},0)`);
-  g.addColorStop(1, `rgba(${rgb},${alpha})`);
-  c.fillStyle = g;
-  c.fillRect(0, 0, w, h);
-  return cv;
+// Livres reliés : 32 dos côte à côte sur les trois quarts du haut (cuir à nerfs, pièce de titre et
+// fers dorés, ou toile à étiquette de papier), puis en bas à gauche la tranche des pages et à droite
+// le cuir uni des plats de chaque dos. Couleur, relief (clair = bosse) et rugosité/métal (vert/bleu :
+// la dorure brille).
+export const BOOK_COLS = 32;
+const LEATHERS = ['#4a1612', '#5a2014', '#2a3a22', '#1c2a3a', '#3a2414', '#5a3a1c', '#1a1412', '#3a1020', '#6a4a2a', '#2a1a10'];
+const CLOTHS = ['#3a4a3a', '#4a2a2a', '#2a3448', '#5a5040', '#3a3030', '#463a2a'];
+const LABELS = ['#5a0e0e', '#121010', '#123018', '#3a0c18'];
+export function bookAtlas() {
+  const W = 2048, H = 1024, SH = 768, CW = W / BOOK_COLS, rnd = mulberry32(1897);
+  const [cv, c] = canvas(W, H), [hv, h] = canvas(W, H), [av, a] = canvas(W, H);
+  h.fillStyle = '#404040';
+  h.fillRect(0, 0, W, H);
+  a.fillStyle = 'rgb(255,150,0)';
+  a.fillRect(0, 0, W, H);
+  const gold = (x, y, w, hh) => {
+    c.fillStyle = '#c8a050';
+    c.fillRect(x, y, w, hh);
+    a.fillStyle = 'rgb(255,80,255)';
+    a.fillRect(x, y, w, hh);
+    h.fillStyle = '#505050';
+    h.fillRect(x, y, w, hh);
+  };
+  const bases = [];
+  for (let i = 0; i < BOOK_COLS; i++) {
+    const x = i * CW, cloth = rnd() < 0.3;
+    const base = cloth ? CLOTHS[Math.floor(rnd() * CLOTHS.length)] : LEATHERS[Math.floor(rnd() * LEATHERS.length)];
+    bases.push(base);
+    c.fillStyle = shade(base, (rnd() - 0.5) * 0.3);
+    c.fillRect(x, 0, CW, SH);
+    // marbrures du cuir, grain de la toile
+    for (let k = 0; k < (cloth ? 260 : 180); k++) {
+      c.fillStyle = rnd() < 0.5 ? `rgba(0,0,0,${0.05 + rnd() * 0.12})` : `rgba(255,230,200,${0.03 + rnd() * 0.06})`;
+      c.fillRect(x + rnd() * CW, rnd() * SH, cloth ? 1 : 2 + rnd() * 5, cloth ? 1 + rnd() * 3 : 2 + rnd() * 8);
+    }
+    a.fillStyle = cloth ? 'rgb(255,225,0)' : `rgb(255,${120 + Math.floor(rnd() * 40)},0)`;
+    a.fillRect(x, 0, CW, SH);
+    // coiffes élimées en haut et en bas
+    for (const [y0, y1] of [[0, 26], [SH, SH - 26]]) {
+      const g = c.createLinearGradient(0, y0, 0, y1);
+      g.addColorStop(0, 'rgba(220,190,150,0.35)');
+      g.addColorStop(1, 'rgba(220,190,150,0)');
+      c.fillStyle = g;
+      c.fillRect(x, Math.min(y0, y1), CW, 26);
+    }
+    if (cloth) {
+      // étiquette de papier, titre à l'encre, deux filets frappés
+      const ly = SH * (0.12 + rnd() * 0.06), lh = SH * 0.13;
+      c.fillStyle = shade('#d8cba8', -rnd() * 0.25);
+      c.fillRect(x + 8, ly, CW - 16, lh);
+      a.fillStyle = 'rgb(255,210,0)';
+      a.fillRect(x + 8, ly, CW - 16, lh);
+      c.fillStyle = 'rgba(40,30,20,0.75)';
+      for (let k = 0; k < 3; k++) c.fillRect(x + 14 + rnd() * 4, ly + 14 + k * 22, CW - 30 - rnd() * 10, 5);
+      for (const y of [SH * 0.05, SH * 0.95]) {
+        c.fillStyle = 'rgba(0,0,0,0.35)';
+        c.fillRect(x, y, CW, 3);
+        h.fillStyle = '#303030';
+        h.fillRect(x, y, CW, 3);
+      }
+      continue;
+    }
+    // cinq ou six nerfs en relief, chacun bordé de deux filets dorés
+    const nb = 4 + Math.floor(rnd() * 2), top = SH * 0.07, step = (SH * 0.93 - top) / (nb + 1);
+    const ys = Array.from({ length: nb }, (_, k) => top + step * (k + 1));
+    for (const y of ys) {
+      const g = h.createLinearGradient(0, y - 9, 0, y + 9);
+      g.addColorStop(0, '#404040');
+      g.addColorStop(0.5, '#e0e0e0');
+      g.addColorStop(1, '#404040');
+      h.fillStyle = g;
+      h.fillRect(x, y - 9, CW, 18);
+      c.fillStyle = 'rgba(255,220,180,0.12)';
+      c.fillRect(x, y - 5, CW, 4);
+      c.fillStyle = 'rgba(0,0,0,0.3)';
+      c.fillRect(x, y + 5, CW, 4);
+      gold(x, y - 13, CW, 2);
+      gold(x, y + 11, CW, 2);
+    }
+    // pièce de titre dans le deuxième entre-nerf, fleurons dans les autres
+    const t0 = top + step + 16, t1 = top + step * 2 - 16;
+    c.fillStyle = LABELS[Math.floor(rnd() * LABELS.length)];
+    c.fillRect(x + 4, t0, CW - 8, t1 - t0);
+    gold(x + 7, t0 + 3, CW - 14, 2);
+    gold(x + 7, t1 - 5, CW - 14, 2);
+    for (let k = 0, n = 2 + Math.floor(rnd() * 2); k < n; k++) gold(x + 12 + rnd() * 4, t0 + 14 + k * ((t1 - t0 - 28) / n), CW - 26 - rnd() * 10, 6);
+    for (let k = 0; k <= nb; k++) {
+      if (k === 1) continue;
+      const cy = top + step * (k + 0.5), cx = x + CW / 2;
+      if (rnd() < 0.3) continue;
+      for (const [dx, dy, s] of [[0, 0, 5], [0, -12, 3], [0, 12, 3], [-10, 0, 3], [10, 0, 3]]) gold(cx + dx - s / 2, cy + dy - s / 2, s, s);
+    }
+  }
+  // tranche des pages : papier jauni, feuillets serrés
+  const [py, ph] = [SH, H - SH];
+  c.fillStyle = '#cdbf9c';
+  c.fillRect(0, py, W / 2, ph);
+  for (let x = 0; x < W / 2; x++) {
+    c.fillStyle = `rgba(${rnd() < 0.5 ? '60,45,25' : '255,250,230'},${rnd() * 0.18})`;
+    c.fillRect(x, py, 1, ph);
+  }
+  for (let k = 0; k < 60; k++) {
+    c.fillStyle = `rgba(90,60,30,${rnd() * 0.12})`;
+    c.fillRect(rnd() * W / 2, py + rnd() * ph, 4 + rnd() * 30, 2 + rnd() * 20);
+  }
+  a.fillStyle = 'rgb(255,215,0)';
+  a.fillRect(0, py, W / 2, ph);
+  // plats : le cuir de chaque dos, uni
+  const pw = W / 2 / BOOK_COLS;
+  bases.forEach((b, i) => {
+    c.fillStyle = shade(b, -0.1);
+    c.fillRect(W / 2 + i * pw, py, pw, ph);
+  });
+  return { color: cv, height: hv, arm: av };
 }

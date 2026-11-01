@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; media-src 'self' blob:">
 <title>Minuit au Manoir</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -37,6 +37,10 @@
     <p id="steamDetail" class="detail"></p>
     <button id="retryBtn" type="button" class="btn">Réessayer</button>
   </div>
+  <div class="quit-btns">
+    <button id="titleOptionsBtn" type="button" class="btn">⚙ Options</button>
+    <button id="titleExitBtn" type="button" class="btn">Quitter le jeu</button>
+  </div>
   <p class="hint">🔊 Monte le son, éteins la lumière. <kbd>F11</kbd> : plein écran.</p>
 </section>
 
@@ -64,7 +68,7 @@
       </ul>
       <h3>Commandes</h3>
       <p class="keys">souris : regarder et viser · ZQSD / WASD : marcher · flèches : avancer et tourner · <kbd>Maj</kbd> courir · <kbd>F</kbd> ou clic droit : lampe · <kbd>E</kbd> ou <kbd>Espace</kbd> : action · <kbd>M</kbd> : plan du manoir</p>
-      <p class="keys"><kbd>F11</kbd> plein écran · <kbd>Échap</kbd> menu (sensibilité de la souris, quitter la partie)</p>
+      <p class="keys"><kbd>F11</kbd> plein écran · <kbd>Échap</kbd> menu (options, quitter la partie)</p>
     </div>
     <div class="panel invite">
       <h3>Inviter des amis</h3>
@@ -89,14 +93,29 @@
 </section>
 
 <div id="menu" class="overlay" hidden>
-  <div class="panel quit">
-    <h3 id="menuTitle">Quitter la partie ?</h3>
+  <div id="menuMain" class="panel quit">
+    <h3>Menu</h3>
     <p id="menuNote" class="note"></p>
-    <label class="sens">Sensibilité de la souris <input id="sens" type="range" min="0.3" max="3" step="0.1"></label>
     <div class="quit-btns">
       <button id="stayBtn" type="button" class="btn">Rester</button>
+      <button id="optionsBtn" type="button" class="btn">Options</button>
       <button id="quitBtn" type="button" class="btn">Quitter</button>
+      <button id="exitBtn" type="button" class="btn">Quitter le jeu</button>
     </div>
+  </div>
+  <div id="options" class="panel quit" hidden>
+    <h3>Options</h3>
+    <label class="setting">Musique <input data-vol="music" type="range" min="0" max="100" step="5"></label>
+    <label class="setting">Effets sonores <input data-vol="sfx" type="range" min="0" max="100" step="5"></label>
+    <label class="setting">Sensibilité de la souris <input id="sens" type="range" min="0.3" max="3" step="0.1"></label>
+    <div id="displaySetting" class="setting" role="group" aria-label="Affichage">Affichage
+      <div class="chips">
+        <button type="button" class="chip" data-display="fullscreen">Plein écran</button>
+        <button type="button" class="chip" data-display="borderless">Plein écran fenêtré</button>
+        <button type="button" class="chip" data-display="windowed">Fenêtré</button>
+      </div>
+    </div>
+    <button id="optionsDone" type="button" class="btn">Retour</button>
   </div>
 </div>
 

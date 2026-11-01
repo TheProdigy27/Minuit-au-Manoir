@@ -1,7 +1,7 @@
 // Pont entre la page du jeu et l'application (réseau Steam, presse-papiers…), sans ouvrir Node à la page.
 const { contextBridge, ipcRenderer } = require('electron');
 
-const EVENTS = { message: 'net:message', status: 'net:status', 'join-request': 'net:join-request' };
+const EVENTS = { message: 'net:message', status: 'net:status', 'join-request': 'net:join-request', display: 'display:changed' };
 
 contextBridge.exposeInMainWorld('mam', {
   info: () => ipcRenderer.invoke('steam:info'),
@@ -11,8 +11,11 @@ contextBridge.exposeInMainWorld('mam', {
   leave: () => ipcRenderer.send('net:leave'),
   send: (data, unreliable) => ipcRenderer.send('net:send', String(data), !!unreliable),
   invite: () => ipcRenderer.send('net:invite'),
+  display: () => ipcRenderer.invoke('display:get'),
+  setDisplay: mode => ipcRenderer.send('display:set', String(mode)),
   copy: text => ipcRenderer.send('clipboard', String(text)),
   testWindow: () => ipcRenderer.send('dev:test-window'),
+  quit: () => ipcRenderer.send('app:quit'),
   on: (event, fn) => {
     if (EVENTS[event]) ipcRenderer.on(EVENTS[event], (_e, value) => fn(value));
   },

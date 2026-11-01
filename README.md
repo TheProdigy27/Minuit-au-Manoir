@@ -68,12 +68,16 @@ La partie se termine quand plus personne n'est debout dans le manoir.
 | Relever un ami / signe de fantôme | E ou Espace (maintenir) |
 | Plan du manoir | M (maintenir) |
 | Suivre un autre joueur (après la fuite) | clic ou Tab |
-| Menu : sensibilité de la souris, quitter la partie | Échap |
-| Plein écran | F11 |
+| Menu : options (son, souris, affichage), quitter la partie ou le jeu | Échap |
+| Passer du plein écran à la fenêtre, et inversement | F11 |
 | Overlay Steam | Maj+Tab |
 
 En partie, la souris est capturée par le jeu. Échap la libère et ouvre le menu ; « Reprendre » ou un
 clic dans la fenêtre la recapture.
+
+Le jeu s'ouvre en plein écran. Les options proposent aussi le **plein écran fenêtré**, qui reste
+affiché quand on passe à une autre application (pratique avec deux écrans), et le mode **fenêtré**.
+Le choix est gardé pour les prochaines fois.
 
 ## Conseils pour la soirée
 
@@ -102,8 +106,8 @@ clic dans la fenêtre la recapture.
   s'ouvrent dans la fenêtre de Steam.
 - **Pas de son** : cliquez dans la fenêtre du jeu.
 - **La vue tourne trop vite ou trop lentement** : Échap, puis réglez « Sensibilité de la souris ».
-- **Le jeu saccade** : il baisse tout seul sa résolution quand l'ordinateur peine. Fermez les autres
-  programmes, et branchez le portable sur secteur.
+- **Le jeu saccade** : quand l'ordinateur peine, il coupe tout seul le lissage des bords, puis baisse
+  sa résolution. Fermez les autres programmes, et branchez le portable sur secteur.
 
 ## Pour bidouiller
 
@@ -125,8 +129,10 @@ npm run dist       fabrique dist/Minuit-au-Manoir-<version>.exe
   [package.json](package.json) : l'hôte n'accepte que les joueurs qui ont la même.
 - `dist/win-unpacked/` contient le jeu décompressé : il démarre plus vite que l'exe. On peut le
   zipper et l'envoyer à la place.
-- Aucun fichier image ni son à part l'icône : les textures sont dessinées et les sons synthétisés
-  par le code. La 3D passe par [three.js](https://threejs.org), installé avec `npm install`.
+- Les matières (bois, pierre, plâtre, tissus, métal…) sont des photographies du domaine public
+  ([Poly Haven](https://polyhaven.com), voir [public/textures/CREDITS.md](public/textures/CREDITS.md)),
+  mêlées aux motifs dessinés par le code. La 3D passe par [three.js](https://threejs.org), installé
+  avec `npm install`.
 
 Le réseau : l'hôte crée un salon Steam public marqué « minuit-au-manoir » et fait tourner la
 partie ; le code affiché, c'est l'identifiant de ce salon. Les invités y entrent, puis échangent avec
@@ -142,7 +148,11 @@ server/game.js        règles de la partie (crânes, piles, réanimation, sortie
 server/monster.js     intelligence de la créature (vue, ouïe, poursuite, fuite)
 shared/               réglages, génération du manoir, collisions (hôte et page)
 public/js/render.js   le manoir en 3D (three.js) : murs, meubles, lumières, personnages, créature
-public/js/art.js      textures dessinées par le code, et le plan vu de dessus (sol, carte)
+public/js/materials.js matières photographiées (rendu physique), posées à l'échelle réelle
+public/js/bc.js       photos compressées pour la carte graphique (dans texworker.js, hors du fil principal)
+public/js/post.js     développement de l'image : halo des lumières, faisceau dans l'air, grain
+public/js/art.js      motifs dessinés par le code (murs, meubles, tapis…) et plan vu de dessus
+public/textures/      photos des matières (Poly Haven, domaine public)
 public/js/hud.js      interface par-dessus la vue : crânes, équipe, repères, plan, apparitions
 public/js/main.js     écrans, réseau, déplacement du joueur, boucle de jeu (+ input.js, audio.js)
 test/                 tests du réseau avec un faux Steam

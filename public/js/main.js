@@ -49,6 +49,9 @@ function show(id) {
   else input.unlock();
 }
 show('title');
+// La musique des menus démarre dès le choix du pseudo (l'application autorise le son sans clic).
+sound.init();
+sound.music(true);
 
 let chosenColor = store.get('mam-color');
 if (!COLORS.includes(chosenColor)) chosenColor = COLORS[Math.floor(Math.random() * COLORS.length)];
@@ -66,7 +69,6 @@ function buildColors() {
   }
 }
 buildColors();
-$('#name').value = store.get('mam-name');
 
 let steamOk = false;
 let busy = false; // création ou connexion en cours
@@ -90,6 +92,7 @@ async function checkSteam(retry = false) {
   steamOk = info.ok;
   $('#steamError').hidden = info.ok || testWindow;
   $('#steamDetail').textContent = info.error;
+  // Le pseudo Steam par défaut, sauf si le joueur a déjà tapé le sien (fenêtre de test : « Test n »)
   if (info.ok && !$('#name').value) $('#name').value = info.name.slice(0, 16);
   setBusy(busy, !$('#cancelBtn').hidden);
 }
@@ -100,7 +103,6 @@ $('#retryBtn').onclick = () => checkSteam(true);
 function prepareHello() {
   const name = $('#name').value.replace(/\s+/g, ' ').trim().slice(0, 16) || 'Anonyme';
   $('#name').value = name;
-  if (!testWindow) store.set('mam-name', name);
   hello = { t: 'hello', name, color: chosenColor };
   sound.init();
   sound.music(true);
@@ -155,7 +157,7 @@ function backToTitle(message = '', kind = '') {
   $('#countdown').textContent = '';
   closeMenu();
   sound.stopGame();
-  sound.music(false);
+  sound.music(true);
   keepAwake(false);
   show('title');
   setBusy(false);
@@ -201,8 +203,8 @@ function renderLobby() {
     b.onclick = () => send({ t: 'diff', v: k });
     box.appendChild(b);
   }
-  $('#lobbyNote').textContent = L.phase === 'playing'
-    ? 'Une partie est en cours… vous rejoindrez la suivante.'
+  $('#lobbyNote').textContent = G.map ? '' // le manoir se prépare : on entre dans cette partie-là
+    : L.phase === 'playing' ? 'Une partie est en cours… vous rejoindrez la suivante.'
     : 'La partie démarre quand tout le monde est prêt.';
   // Les fenêtres de test sont toujours prêtes : l'hôte décide du départ.
   if (testWindow && me && !me.ready && L.phase === 'lobby') send({ t: 'ready', v: true });
@@ -232,49 +234,78 @@ $('#leaveBtn').onclick = () => openMenu();
 
 // Menu (Échap) : la partie continue pendant ce temps, le personnage reste immobile.
 // En partie, il s'ouvre aussi dès que la souris est libérée (Échap, Alt+Tab…).
+// Sur l'écran titre, il n'affiche que les options.
 const menu = $('#menu');
 let menuOpenedAt = -1e9;
+let optionsOnly = false;
 function openMenu() {
   if (!menu.hidden) return;
   const others = (G.lobby?.players.length ?? 1) - 1;
   const inGame = G.screen === 'game';
-  $('#menuTitle').textContent = inGame ? 'Menu' : 'Quitter le salon ?';
   $('#menuNote').textContent = (inGame ? 'La partie continue pendant ce temps : votre personnage reste immobile. ' : '')
     + (!G.hosting ? 'Vous pourrez revenir avec le même code tant que la partie continue.'
       : others > 0 ? 'Vous hébergez la partie : la quitter l’arrêtera pour tout le monde.'
       : 'Vous hébergez la partie : la quitter la fermera.');
   $('#stayBtn').textContent = inGame ? 'Reprendre' : 'Rester';
-  $('#quitBtn').textContent = inGame ? 'Quitter la partie' : 'Quitter';
-  $('.sens').hidden = !inGame;
+  $('#quitBtn').textContent = inGame ? 'Quitter la partie' : 'Quitter le salon';
+  optionsOnly = G.screen === 'title';
   menu.hidden = false;
   menuOpenedAt = performance.now();
   input.keys.clear();
   input.unlock();
-  $('#stayBtn').focus();
+  showOptions(optionsOnly);
+}
+function showOptions(on) {
+  $('#menuMain').hidden = on;
+  $('#options').hidden = !on;
+  $('#optionsDone').textContent = optionsOnly ? 'Fermer' : 'Retour';
+  (on ? $('#optionsDone') : $('#stayBtn')).focus();
 }
 function closeMenu() {
   menu.hidden = true;
   if (G.screen === 'game' && input.wantLock) input.lock();
 }
+$('#titleOptionsBtn').onclick = openMenu;
+$('#optionsBtn').onclick = () => showOptions(true);
+$('#optionsDone').onclick = () => (optionsOnly ? closeMenu() : showOptions(false));
 $('#stayBtn').onclick = closeMenu;
 $('#quitBtn').onclick = () => {
   if (testWindow) return window.close();
   mam.leave();
   backToTitle();
 };
+// Fermer l'application : chez l'hôte d'une partie, elle demande d'abord confirmation
+$('#titleExitBtn').onclick = $('#exitBtn').onclick = () => (testWindow ? window.close() : mam.quit());
 input.onUnlock = () => { if (G.screen === 'game' && input.wantLock) openMenu(); };
 
-// Sensibilité de la souris (réglée dans le menu)
+// Options : sensibilité de la souris et volumes, gardés d'une session à l'autre
 let sensitivity = clamp(parseFloat(store.get('mam-sens', '1')) || 1, 0.3, 3);
 $('#sens').value = sensitivity;
 $('#sens').oninput = () => { sensitivity = parseFloat($('#sens').value); store.set('mam-sens', sensitivity); };
+for (const el of document.querySelectorAll('[data-vol]')) {
+  const kind = el.dataset.vol, key = 'mam-vol-' + kind;
+  const v = parseFloat(store.get(key, '100'));
+  el.value = Number.isFinite(v) ? clamp(v, 0, 100) : 100;
+  sound.setVolume(kind, el.value / 100);
+  el.oninput = () => { sound.setVolume(kind, el.value / 100); store.set(key, el.value); };
+  // Un petit son pour entendre le nouveau volume des effets, même sur l'écran titre
+  if (kind === 'sfx') el.onchange = () => sound.click();
+}
+// Affichage : c'est l'application qui le garde, pour ouvrir la fenêtre directement dans le bon mode (F11 le change aussi)
+const displayBtns = document.querySelectorAll('[data-display]');
+const showDisplay = mode => { for (const b of displayBtns) b.classList.toggle('on', b.dataset.display === mode); };
+for (const b of displayBtns) b.onclick = () => { mam.setDisplay(b.dataset.display); showDisplay(b.dataset.display); sound.click(); };
+$('#displaySetting').hidden = testWindow;
+mam.display().then(showDisplay);
+mam.on('display', showDisplay);
 
 addEventListener('keydown', e => {
   if (e.code === 'Escape') {
     // La touche qui vient de libérer la souris a déjà ouvert le menu.
     if (performance.now() - menuOpenedAt < 300) return;
-    if (!menu.hidden) closeMenu();
-    else if (G.screen !== 'title') openMenu();
+    if (menu.hidden) openMenu();
+    else if (!$('#options').hidden && !optionsOnly) showOptions(false);
+    else closeMenu();
   } else if (e.code === 'KeyN' && e.ctrlKey && e.shiftKey && G.hosting) {
     mam.testWindow();
   }
@@ -374,7 +405,10 @@ function onMessage(m) {
   }
 }
 
-function startGame(m) {
+let loading = 0; // numéro de la partie en préparation (une plus récente, ou un retour au salon, l'annule)
+const nextPaint = () => new Promise(ok => requestAnimationFrame(() => setTimeout(ok)));
+
+async function startGame(m) {
   const map = m.map;
   map.tiles = Uint8Array.from(map.tiles, ch => ch.charCodeAt(0) - 48);
   G.map = map;
@@ -398,7 +432,17 @@ function startGame(m) {
   G.fear = G.flash = G.shake = G.jumpscare = 0;
   G.spectating = null;
   Object.assign(G.view, { x: map.spawn.x, y: map.spawn.y, a: -Math.PI / 2, p: 0, who: null });
+  // Construction du manoir et compilation de ses shaders, le salon restant affiché : la créature dort
+  // encore, et le jeu ne se fige plus ensuite à chaque nouveauté.
+  const token = ++loading, t0 = performance.now();
+  $('#countdown').textContent = 'Le manoir se prépare…';
+  renderLobby();
+  await nextPaint();
+  if (token !== loading || G.map !== map) return;
   renderer.setMap(map);
+  await renderer.prepare(G).catch(err => console.error(err));
+  if (token !== loading || G.map !== map) return;
+  G.time += (performance.now() - t0) / 1000;
   $('#countdown').textContent = '';
   show('game');
   if (G.me) input.lock();
@@ -494,7 +538,7 @@ function onEvent(e) {
       if (mine(e.id)) {
         G.jumpscare = 1;
         G.shake = 1.2;
-        sound.jumpscare();
+        sound.scream(0, 1);
       } else {
         const p = G.players.get(e.id);
         say(`✚ ${name(e.id)} est à terre ! Allez l’aider !`, 'red');
@@ -551,6 +595,7 @@ function endGame(m) {
   sound.stopGame();
   keepAwake(false);
   G.map = null;
+  $('#countdown').textContent = '';
   const total = m.results.length, saved = m.results.filter(r => r.outcome === 'escaped').length;
   $('#resTitle').textContent = saved === total ? 'Vous avez survécu' : saved > 0 ? 'Une partie du groupe a survécu' : 'Le manoir a eu raison de vous';
   const mins = Math.floor(m.time / 60), secs = String(m.time % 60).padStart(2, '0');
@@ -754,9 +799,22 @@ function sendInput(now) {
 
 const IDLE = { fwd: 0, side: 0, turn: 0, look: { x: 0, y: 0 }, run: false, act: false, actPressed: false, toggleLight: false, next: false, plan: false };
 
-let last = performance.now();
+// Sur un écran rapide (120 Hz, 144 Hz…), une image sur deux (ou plus) seulement : 60 à 80 images par
+// seconde suffisent ici, et la carte graphique travaille deux fois moins. L'écran se mesure au plus
+// court intervalle entre deux appels, les appels sautés comptant aussi.
+let last = performance.now(), lastCall = last, refresh = 1000 / 60, fastest = Infinity, sampleUntil = 0, skipped = 0;
 function loop(now) {
   requestAnimationFrame(loop);
+  const gap = now - lastCall;
+  lastCall = now;
+  if (gap > 2) fastest = Math.min(fastest, gap);
+  if (now > sampleUntil) {
+    if (fastest < Infinity) refresh = fastest;
+    fastest = Infinity;
+    sampleUntil = now + 2000;
+  }
+  if (++skipped < Math.floor(1000 / 60 / refresh + 0.1)) return;
+  skipped = 0;
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   if (G.screen === 'game' && G.map) {

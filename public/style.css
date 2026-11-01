@@ -30,8 +30,6 @@ canvas#game, canvas#hud {
   display: block;
 }
 canvas#hud { z-index: 1; pointer-events: none; }
-/* les morts voient le manoir délavé */
-canvas#game.ghost { filter: grayscale(0.85) brightness(1.08); }
 
 .screen {
   position: fixed;
@@ -223,9 +221,11 @@ kbd { font-family: inherit; border: 1px solid var(--line); border-bottom-width: 
 }
 .quit { width: min(420px, 100%); text-align: center; }
 .quit .note { margin: 0 0 16px; }
-.sens { display: flex; flex-direction: column; gap: 6px; margin: 0 0 18px; color: var(--dim); font-size: 15px; }
-.sens input { padding: 0; accent-color: var(--red); }
-.quit-btns { display: flex; gap: 10px; justify-content: center; }
+.setting { display: flex; flex-direction: column; gap: 6px; margin: 0 0 16px; color: var(--dim); font-size: 15px; }
+.setting input { padding: 0; accent-color: var(--red); }
+.setting .chips { justify-content: center; }
+.setting .chip { font-size: 15px; }
+.quit-btns { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
 
 .awards { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
 .award { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; font-size: 16px; }

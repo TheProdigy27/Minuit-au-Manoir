@@ -1,7 +1,7 @@
 // Interface dessinée par-dessus la vue 3D : crânes, équipe, lampe, messages, repères vers les amis
 // à terre et la sortie, plan du manoir, et l'apparition de la créature quand elle vous attrape.
 import { CFG } from '/shared/config.js';
-import { TAU, FONT, TITLE, circle, grainCanvas, vignetteCanvas } from './art.js';
+import { TAU, FONT, TITLE, circle } from './art.js';
 
 function text(c, str, x, y, size, color, align = 'left', font = FONT) {
   c.font = `${Math.round(size)}px ${font}`;
@@ -46,7 +46,6 @@ export class Hud {
   constructor(canvas) {
     this.cv = canvas;
     this.ctx = canvas.getContext('2d');
-    this.grain = grainCanvas();
     this.map = null;
     this.plan = null;
   }
@@ -56,14 +55,17 @@ export class Hud {
     const w = (this.w = this.cv.width = Math.round(innerWidth * dpr));
     const h = (this.h = this.cv.height = Math.round(innerHeight * dpr));
     this.u = Math.max(Math.min(w, h) / 700, dpr * 0.9);
-    this.vignette = vignetteCanvas(w, h, '0,0,0', 0.3, 0.9);
-    this.redVignette = vignetteCanvas(w, h, '150,0,0', 0.35, 0.9);
-    this.grainPat = this.ctx.createPattern(this.grain, 'repeat');
   }
 
+  // Le plan est teinté une fois pour toutes (un filtre à chaque image, touche M maintenue, coûtait cher).
   setMap(map, plan) {
     this.map = map;
-    this.plan = plan;
+    const cv = (this.plan = document.createElement('canvas'));
+    cv.width = plan.width;
+    cv.height = plan.height;
+    const c = cv.getContext('2d');
+    c.filter = 'sepia(0.55) brightness(0.85)';
+    c.drawImage(plan, 0, 0);
   }
 
   draw(G, view) {
@@ -73,7 +75,6 @@ export class Hud {
     c.globalCompositeOperation = 'source-over';
     c.clearRect(0, 0, this.w, this.h);
     c.textBaseline = 'middle';
-    this.post(G);
     if (G.showPlan) this.drawPlan(G);
     else {
       this.labels(G, view);
@@ -87,35 +88,6 @@ export class Hud {
       text(c, 'Cliquez pour reprendre', this.w / 2, this.h / 2 - 10 * u, 26 * u, 'rgba(255,225,190,0.95)', 'center', TITLE);
       text(c, 'La souris sert à regarder autour de vous · Échap : menu', this.w / 2, this.h / 2 + 22 * u, 14 * u, 'rgba(232,220,200,0.75)', 'center');
     }
-  }
-
-  post(G) {
-    const c = this.ctx, w = this.w, h = this.h, ghost = G.me?.state === 'dead';
-    if (ghost) {
-      c.fillStyle = 'rgba(40,70,130,0.16)';
-      c.fillRect(0, 0, w, h);
-    }
-    c.globalAlpha = Math.min(1, 0.7 + G.fear * 0.4);
-    c.drawImage(this.vignette, 0, 0);
-    if (G.me?.state === 'down') {
-      c.globalAlpha = 0.55 + 0.25 * Math.sin(G.time * 4);
-      c.drawImage(this.redVignette, 0, 0);
-    } else if (G.fear > 0.35) {
-      c.globalAlpha = (G.fear - 0.35) * 0.9 * (0.6 + 0.4 * Math.sin(G.time * 9));
-      c.drawImage(this.redVignette, 0, 0);
-    }
-    c.globalAlpha = 0.05 + G.fear * 0.1;
-    const gx = Math.floor(Math.random() * 256), gy = Math.floor(Math.random() * 256);
-    c.translate(-gx, -gy);
-    c.fillStyle = this.grainPat;
-    c.fillRect(gx, gy, w, h);
-    c.setTransform(1, 0, 0, 1, 0, 0);
-    if (G.flash > 0) {
-      c.globalAlpha = Math.min(0.3, G.flash * 0.3);
-      c.fillStyle = 'rgb(200,210,255)';
-      c.fillRect(0, 0, w, h);
-    }
-    c.globalAlpha = 1;
   }
 
   // Repère au-dessus d'un point du manoir ; hors du champ de vision, une flèche au bord de l'écran
@@ -263,10 +235,7 @@ export class Hud {
     c.fillRect(0, 0, w, h);
     const s = Math.min((w * 0.9) / map.w, (h * 0.78) / map.h);
     const x0 = (w - map.w * s) / 2, y0 = (h - map.h * s) / 2 + 14 * u;
-    c.save();
-    c.filter = 'sepia(0.55) brightness(0.85)';
     c.drawImage(plan, x0, y0, map.w * s, map.h * s);
-    c.restore();
     c.strokeStyle = 'rgba(232,220,200,0.35)';
     c.lineWidth = 2 * u;
     c.strokeRect(x0, y0, map.w * s, map.h * s);

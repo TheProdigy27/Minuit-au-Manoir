@@ -1,5 +1,9 @@
-// Tous les sons sont synthétisés en direct (Web Audio) : aucun fichier audio nécessaire.
+// Les sons sont synthétisés en direct (Web Audio), sauf la musique des menus et ceux de SAMPLES.
 const MELODY = [12, 15, 19, 24, 23, 19, 15, 14, 12, 15, 19, 17, 15, 14, 11, 7, 8, 12, 15, 20, 19, 15, 12, 11, 12, null, 7, null, 12, null, null, null];
+const MUSIC_URL = 'audio/menu.mp3';
+const SAMPLES = { scream: 'audio/scream.mp3' };
+const MUSIC_VOLUME = 0.7;
+const MUSIC_FADE = 1.5; // secondes
 
 export class Sound {
   constructor() {
@@ -10,18 +14,25 @@ export class Sound {
     this.inGame = false;
     this.nextBeat = 0;
     this.ambT = 6;
-    this.musicTimer = null;
+    this.track = null;
+    this.musicOn = false;
+    this.musicStop = null;
+    this.volume = { music: 1, sfx: 1 };
+    this.samples = {};
   }
 
   init() {
     if (this.ctx) { if (this.ctx.state !== 'running') this.ctx.resume().catch(() => {}); return; }
     const c = (this.ctx = new AudioContext());
     this.master = c.createGain();
-    this.master.gain.value = 0.9;
     const comp = c.createDynamicsCompressor();
     comp.threshold.value = -16;
     comp.ratio.value = 5;
     this.master.connect(comp).connect(c.destination);
+    // La musique des menus passe à côté du compresseur et de la réverbération.
+    this.musicOut = c.createGain();
+    this.musicOut.connect(c.destination);
+    this.applyVolume();
     this.verb = c.createConvolver();
     this.verb.buffer = this.impulse(3.2, 2.4);
     const wet = c.createGain();
@@ -34,6 +45,22 @@ export class Sound {
     this.bus.connect(send).connect(this.verb);
     this.noise = this.noiseBuffer(3);
     this.curve = this.distortion(40);
+    // Sons enregistrés, décodés d'avance pour partir sans délai
+    for (const [name, url] of Object.entries(SAMPLES)) {
+      fetch(url).then(r => (r.ok ? r.arrayBuffer() : Promise.reject())).then(b => c.decodeAudioData(b))
+        .then(buf => { this.samples[name] = buf; }).catch(() => {});
+    }
+  }
+
+  // Volumes du menu Options (0 à 1), mis au carré pour suivre la perception de l'oreille.
+  setVolume(kind, v) {
+    this.volume[kind] = v;
+    if (this.ctx) this.applyVolume();
+  }
+
+  applyVolume() {
+    this.master.gain.setTargetAtTime(0.9 * this.volume.sfx ** 2, this.t, 0.03);
+    this.musicOut.gain.setTargetAtTime(this.volume.music ** 2, this.t, 0.03);
   }
 
   get t() { return this.ctx.currentTime; }
@@ -246,23 +273,33 @@ export class Sound {
     }
   }
 
-  // --- Boîte à musique du salon ---
+  // --- Musique des menus : audio/menu.mp3 en boucle, avec fondu ---
   music(on) {
     if (!this.ctx) return;
-    clearInterval(this.musicTimer);
-    this.musicTimer = null;
-    if (!on) return;
-    let step = 0, next = this.t + 0.2;
-    this.musicTimer = setInterval(() => {
-      while (next < this.t + 0.5) {
-        const n = MELODY[step % MELODY.length];
-        if (n !== null) this.bell(220 * Math.pow(2, n / 12), next, 0.1);
-        step++;
-        next += 0.42;
-      }
-    }, 120);
+    this.musicOn = on;
+    if (!this.track) {
+      if (!on) return;
+      this.track = new Audio();
+      this.track.loop = true;
+      this.trackGain = this.ctx.createGain();
+      this.trackGain.gain.value = 0;
+      this.ctx.createMediaElementSource(this.track).connect(this.trackGain).connect(this.musicOut);
+      // Chargée en entier dans un blob : le protocole app:// ne sait pas servir un média en flux.
+      fetch(MUSIC_URL).then(r => (r.ok ? r.blob() : Promise.reject())).then(b => {
+        this.track.src = URL.createObjectURL(b);
+        if (this.musicOn) this.track.play().catch(() => {});
+      }).catch(() => {});
+    }
+    clearTimeout(this.musicStop);
+    const g = this.trackGain.gain, t = this.t;
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(g.value, t);
+    g.linearRampToValueAtTime(on ? MUSIC_VOLUME : 0, t + MUSIC_FADE);
+    if (!on) this.musicStop = setTimeout(() => { this.track.pause(); this.track.currentTime = 0; }, MUSIC_FADE * 1000);
+    else if (this.track.src && this.track.paused) this.track.play().catch(() => {});
   }
 
+  // --- Boîte à musique du salon ---
   bell(f, t, vol, dest = this.bus) {
     const o = this.out(0, vol, dest);
     this.tone('sine', f, f, t, 1.6, 0.6, o, 0.004);
@@ -363,42 +400,14 @@ export class Sound {
     for (const f of [880, 932, 988, 1046]) this.tone('sawtooth', f, f * 1.02, t, 0.35, 0.3, bp, 0.005);
   }
 
-  jumpscare() {
-    const c = this.ctx;
-    if (!c) return;
-    const t = this.t;
-    const ws = c.createWaveShaper();
-    ws.curve = this.curve;
-    const g = c.createGain();
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(1, t + 0.01);
-    g.gain.setValueAtTime(1, t + 0.6);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.4);
-    ws.connect(g).connect(this.bus);
-    for (const f of [180, 233, 311, 415]) {
-      const o = c.createOscillator();
-      o.type = 'sawtooth';
-      o.frequency.setValueAtTime(f, t);
-      o.frequency.exponentialRampToValueAtTime(f * 3.2, t + 0.5);
-      o.frequency.exponentialRampToValueAtTime(f * 1.5, t + 1.3);
-      o.connect(ws);
-      o.start(t);
-      o.stop(t + 1.4);
-    }
-    this.hiss(t, 1, 0.8, ws, 'highpass', 400, 2000);
-    this.tone('sine', 120, 30, t, 0.7, 0.9, this.out(0, 1, this.master));
-  }
-
-  scream(pan = 0) {
-    const c = this.ctx;
-    if (!c) return;
-    const t = this.t, bp = c.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.frequency.value = 1100;
-    bp.Q.value = 3;
-    bp.connect(this.out(pan, 0.35));
-    this.tone('sawtooth', 520, 880, t, 0.25, 0.6, bp, 0.03);
-    this.tone('sawtooth', 880, 400, t + 0.25, 0.6, 0.5, bp);
+  // Joueur attrapé par la créature (audio/scream.mp3)
+  scream(pan = 0, vol = 0.35) {
+    const buf = this.samples.scream;
+    if (!this.ctx || !buf) return;
+    const s = this.ctx.createBufferSource();
+    s.buffer = buf;
+    s.connect(this.out(pan, vol));
+    s.start();
   }
 
   thunder() {

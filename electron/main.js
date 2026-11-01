@@ -13,9 +13,18 @@ const MIME = {
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.png': 'image/png',
+  '.jpg': 'image/jpeg',
   '.svg': 'image/svg+xml',
+  '.mp3': 'audio/mpeg',
 };
 const NO_STEAM = 'Steam n’est pas disponible : lancez Steam, connectez-vous, puis réessayez.';
+
+// Affichage, gardé d'une session à l'autre : plein écran (par défaut), plein écran fenêtré ou fenêtré.
+// Electron n'a pas de plein écran exclusif : « plein écran » s'en rapproche en se réduisant dès que le jeu
+// perd la main (Alt+Tab, clic sur un autre écran), alors que le plein écran fenêtré reste affiché.
+const DISPLAYS = ['fullscreen', 'borderless', 'windowed'];
+let display = 'fullscreen', lastFull = 'fullscreen'; // lastFull : le plein écran que F11 rétablit
+let confirming = false; // boîte « Vous hébergez la partie » ouverte : elle ne doit pas réduire le jeu
 
 let mainWin = null;
 let steam = null, steamError = '', network = null;
@@ -33,9 +42,12 @@ function launch() {
   startSteam();
   protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     Menu.setApplicationMenu(null);
     protocol.handle('app', serve);
+    const saved = await fs.readFile(settingsFile(), 'utf8').then(JSON.parse).catch(() => ({}));
+    if (DISPLAYS.includes(saved.display)) display = saved.display;
+    if (display !== 'windowed') lastFull = display;
     openMain();
   });
   app.on('second-instance', bringToFront);
@@ -76,8 +88,12 @@ function launch() {
     else if (isMain(e)) network?.send(data, unreliable);
   });
   ipcMain.on('net:invite', e => { if (isMain(e)) network?.invite(); });
+  ipcMain.handle('display:get', () => display);
+  ipcMain.on('display:set', (e, mode) => { if (isMain(e)) setDisplay(mode); });
   ipcMain.on('clipboard', (e, text) => clipboard.writeText(String(text)));
   ipcMain.on('dev:test-window', e => { if (isMain(e)) openTest(); });
+  // Comme la croix de la fenêtre : l'hôte d'une partie doit d'abord confirmer.
+  ipcMain.on('app:quit', e => { if (isMain(e)) mainWin.close(); });
 }
 
 function startSteam() {
@@ -118,6 +134,17 @@ function info(e) {
 }
 
 const isMain = e => !!mainWin && e.sender === mainWin.webContents;
+
+const settingsFile = () => path.join(app.getPath('userData'), 'reglages.json');
+
+function setDisplay(mode) {
+  if (!DISPLAYS.includes(mode)) return;
+  display = mode;
+  if (mode !== 'windowed') lastFull = mode;
+  mainWin?.setFullScreen(mode !== 'windowed');
+  toMain('display:changed', mode);
+  fs.writeFile(settingsFile(), JSON.stringify({ display })).catch(() => {});
+}
 
 function toMain(channel, value) {
   if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send(channel, value);
@@ -160,7 +187,8 @@ function createWindow(query, options) {
   });
   win.webContents.on('before-input-event', (e, input) => {
     if (input.type !== 'keyDown') return;
-    if (input.key === 'F11') win.setFullScreen(!win.isFullScreen());
+    if (input.key === 'F11' && win === mainWin) setDisplay(display === 'windowed' ? lastFull : 'windowed');
+    else if (input.key === 'F11') win.setFullScreen(!win.isFullScreen());
     else if (input.key === 'F12' || (input.control && input.shift && input.code === 'KeyI')) win.webContents.toggleDevTools();
     else return;
     e.preventDefault();
@@ -172,12 +200,22 @@ function createWindow(query, options) {
 }
 
 function openMain() {
-  mainWin = createWindow('', {});
-  mainWin.once('ready-to-show', () => { mainWin.maximize(); mainWin.show(); });
+  mainWin = createWindow('', { fullscreen: display !== 'windowed' });
+  mainWin.once('ready-to-show', () => {
+    if (display === 'windowed') mainWin.maximize();
+    mainWin.show();
+  });
+  // Plein écran : le jeu se réduit quand on passe à une autre application (pas à une fenêtre de test ni aux outils de développement).
+  mainWin.on('blur', () => setTimeout(() => {
+    if (display !== 'fullscreen' || !mainWin || confirming || mainWin.isFocused() || mainWin.isMinimized()) return;
+    if (BrowserWindow.getFocusedWindow() || mainWin.webContents.isDevToolsOpened()) return;
+    mainWin.minimize();
+  }, 100));
   // Page (re)chargée : elle repart de l'écran titre, on quitte donc toute partie en cours.
   mainWin.webContents.on('did-finish-load', () => { closeTests(); network?.leave(); });
   mainWin.on('close', e => {
     if (!network?.guests) return;
+    confirming = true;
     const choice = dialog.showMessageBoxSync(mainWin, {
       type: 'warning',
       title: 'Minuit au Manoir',
@@ -187,6 +225,7 @@ function openMain() {
       defaultId: 0,
       cancelId: 0,
     });
+    confirming = false;
     if (choice === 0) e.preventDefault();
   });
   mainWin.on('closed', () => { mainWin = null; app.quit(); });
