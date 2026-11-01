@@ -1,11 +1,12 @@
 // Application de bureau : la fenêtre du jeu, Steam et le pont entre la page et le réseau.
-import { app, BrowserWindow, ipcMain, protocol, clipboard, dialog, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, protocol, clipboard, dialog, Menu, net, shell } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import steamworks from 'steamworks.js';
 import { Room } from '../server/room.js';
 import { Network, SPACEWAR } from './network.js';
+import { Updater, readPending, install, cleanUp, relaunch } from './update.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MIME = {
@@ -31,8 +32,29 @@ let steam = null, steamError = '', network = null;
 const tests = new Map(); // fenêtres de test : id de la page → { win, socket }
 let testCount = 0;
 
+// Mise à jour : de l'exe portable, ou du dossier du jeu dézippé (lancé depuis les sources, le jeu
+// signale seulement la nouvelle version).
+const PORTABLE = process.env.PORTABLE_EXECUTABLE_FILE;
+const pendingFile = path.join(app.getPath('userData'), 'maj.json');
+const pending = readPending(pendingFile);
+const updater = new Updater({
+  version: app.getVersion(),
+  kind: PORTABLE ? 'exe' : app.isPackaged ? 'zip' : null,
+  target: PORTABLE || path.dirname(process.execPath),
+  exeName: path.basename(process.execPath),
+  temp: path.join(app.getPath('temp'), 'Minuit-au-Manoir-maj'),
+  pendingFile,
+  fetch: (url, options) => net.fetch(url, options),
+});
+let updating = false; // la nouvelle version démarrera quand celle-ci se fermera
+
 // Une seule instance : un double-clic de trop ramène simplement la fenêtre ouverte.
-if (!app.requestSingleInstanceLock()) app.exit(0);
+// Sauf la nouvelle version d'un jeu dézippé, qui vient se recopier à la place de l'ancienne.
+const installed = install(pendingFile, pending);
+if (installed) {
+  relaunch(installed);
+  app.exit(0);
+} else if (!app.requestSingleInstanceLock()) app.exit(0);
 else launch();
 
 function launch() {
@@ -49,10 +71,20 @@ function launch() {
     if (DISPLAYS.includes(saved.display)) display = saved.display;
     if (display !== 'windowed') lastFull = display;
     openMain();
+    cleanUp(pendingFile, pending, [process.execPath, PORTABLE]);
+    // Après l'ouverture, pour ne pas la ralentir ; puis de temps en temps, pour ceux qui laissent le jeu ouvert.
+    setTimeout(() => updater.check(), 3000);
+    setInterval(() => updater.check(), 30 * 60e3);
   });
   app.on('second-instance', bringToFront);
   app.on('window-all-closed', () => app.quit());
-  app.on('will-quit', () => network?.dispose());
+  app.on('will-quit', () => {
+    network?.dispose();
+    if (!updating) return updater.dispose();
+    app.releaseSingleInstanceLock();
+    updater.start();
+  });
+  updater.on('state', s => toMain('update:state', s));
 
   ipcMain.handle('steam:info', e => info(e));
   ipcMain.handle('steam:retry', e => { startSteam(); return info(e); });
@@ -92,6 +124,18 @@ function launch() {
   ipcMain.on('display:set', (e, mode) => { if (isMain(e)) setDisplay(mode); });
   ipcMain.on('clipboard', (e, text) => clipboard.writeText(String(text)));
   ipcMain.on('dev:test-window', e => { if (isMain(e)) openTest(); });
+  ipcMain.handle('update:get', e => (isMain(e) ? updater.status : { state: 'none' }));
+  ipcMain.on('update:check', e => { if (isMain(e)) updater.check(); });
+  // Le bouton de l'écran titre : redémarrer sur la nouvelle version, réessayer, ou ouvrir la page de la release
+  ipcMain.on('update:go', e => {
+    if (!isMain(e)) return;
+    const { state } = updater.status;
+    if (state === 'ready' && !network?.guests) {
+      updating = true;
+      app.quit();
+    } else if (state === 'failed') updater.check();
+    else if (state === 'manual') shell.openExternal(updater.page);
+  });
   // Comme la croix de la fenêtre : l'hôte d'une partie doit d'abord confirmer.
   ipcMain.on('app:quit', e => { if (isMain(e)) mainWin.close(); });
 }

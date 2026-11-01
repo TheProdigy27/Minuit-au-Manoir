@@ -14,8 +14,24 @@ ordinateur et où qu'il soit. Les joueurs se retrouvent grâce à Steam : aucun 
 - Le fichier **`Minuit-au-Manoir-3.1.0.exe`**, à télécharger sur la page
   [Releases](https://github.com/TheProdigy27/Minuit-au-Manoir/releases/latest). Rien à installer.
   Tout le monde doit avoir la même version : l'hôte refuse les joueurs qui en ont une autre.
+  Le jeu se met à jour tout seul (voir [Mises à jour](#mises-à-jour)).
   Variante : `Minuit-au-Manoir-3.1.0-win.zip`, le même jeu décompressé, qui démarre plus vite.
   Dézippez-le, puis lancez `Minuit au Manoir.exe` dans le dossier.
+
+## Mises à jour
+
+Au lancement, le jeu regarde s'il existe une version plus récente sur la page Releases. Si oui, il
+la télécharge pendant qu'on est sur l'écran titre, puis propose **« Redémarrer et mettre à jour »** :
+un clic, et le jeu se rouvre dans la nouvelle version.
+
+- Avec l'exe, la nouvelle version arrive dans le même dossier, sous son nouveau nom (par exemple
+  `Minuit-au-Manoir-3.2.0.exe`), et l'ancienne est effacée. Un raccourci vers l'ancien fichier est
+  à refaire.
+- Avec le zip, le dossier du jeu est mis à jour sur place.
+- Si le jeu n'a pas le droit d'écrire dans son dossier, le bouton ouvre la page de téléchargement.
+
+Le jeu revérifie toutes les 30 minutes. Pour ne pas attendre, ouvrez les **Options** : elles
+affichent la version installée, et **« Rechercher une mise à jour »** interroge GitHub tout de suite.
 
 ## Lancer une partie
 
@@ -68,7 +84,7 @@ La partie se termine quand plus personne n'est debout dans le manoir.
 | Relever un ami / signe de fantôme | E ou Espace (maintenir) |
 | Plan du manoir | M (maintenir) |
 | Suivre un autre joueur (après la fuite) | clic ou Tab |
-| Menu : options (son, souris, affichage), quitter la partie ou le jeu | Échap |
+| Menu : options (son, souris, affichage, mises à jour), quitter la partie ou le jeu | Échap |
 | Passer du plein écran à la fenêtre, et inversement | F11 |
 | Overlay Steam | Maj+Tab |
 
@@ -96,7 +112,9 @@ Le choix est gardé pour les prochaines fois.
   cliquez sur « Réessayer ».
 - **« Impossible de rejoindre cette partie »** : vérifiez le code. La partie est peut-être pleine
   (8 joueurs) ou l'hôte l'a fermée.
-- **« L'hôte a la version … »** : tout le monde doit utiliser le même fichier `.exe`.
+- **« L'hôte a la version … »** : tout le monde doit avoir la même version. Celui qui a l'ancienne
+  attend sur l'écran titre que la nouvelle soit téléchargée, puis clique sur « Redémarrer et mettre
+  à jour ».
 - **« Impossible de joindre l'hôte » ou « Connexion perdue »** : vérifiez que chacun a internet et
   que Steam est connecté, puis réessayez. Au besoin, l'hôte recrée la partie.
 - **L'antivirus bloque le fichier** : c'est un faux positif courant pour les exécutables non
@@ -116,7 +134,7 @@ Il faut [Node.js](https://nodejs.org) 22.12 ou plus récent, et Steam lancé.
 ```
 npm install
 npm start          lance le jeu depuis les sources
-npm test           teste le réseau avec un faux Steam
+npm test           teste le réseau (faux Steam) et la mise à jour (faux GitHub)
 npm run dist       fabrique dist/Minuit-au-Manoir-<version>.exe
 ```
 
@@ -125,8 +143,11 @@ npm run dist       fabrique dist/Minuit-au-Manoir-<version>.exe
 - **Tester seul** : créez une partie, puis appuyez sur **Ctrl+Maj+N** dans le salon. Une fenêtre
   de test s'ouvre : c'est un joueur de plus sur ce PC, sans Steam, toujours prêt. Fermez-la pour le
   retirer. **F12** ouvre les outils de développement.
-- Avant de redistribuer une version modifiée, augmentez `version` dans
-  [package.json](package.json) : l'hôte n'accepte que les joueurs qui ont la même.
+- **Publier une mise à jour** : augmentez `version` dans [package.json](package.json) (l'hôte
+  n'accepte que les joueurs qui ont la même), `npm run dist`, puis créez une release GitHub avec le
+  tag `v<version>` (par exemple `v3.2.0`) et deux fichiers : l'exe, et le zip de `dist/win-unpacked`
+  (son nom doit finir par `-win.zip`). Les jeux déjà installés la trouvent tout seuls : ils regardent
+  la dernière release publiée (ni brouillon ni préversion) et reconnaissent les fichiers à leur nom.
 - `dist/win-unpacked/` contient le jeu décompressé : il démarre plus vite que l'exe. On peut le
   zipper et l'envoyer à la place.
 - Les matières (bois, pierre, plâtre, tissus, métal…) sont des photographies du domaine public
@@ -143,6 +164,7 @@ les déplacements partent en envoi non fiable, le reste en envoi fiable.
 electron/main.js      application : fenêtre, Steam, pont entre la page et le réseau
 electron/network.js   salon Steam, code de partie, échanges P2P entre l'hôte et les invités
 electron/preload.cjs  ce que la page peut demander à l'application
+electron/update.js    mise à jour automatique depuis les releases GitHub
 server/room.js        salon, connexions et reconnexions, début et fin de partie (chez l'hôte)
 server/game.js        règles de la partie (crânes, piles, réanimation, sortie)
 server/monster.js     intelligence de la créature (vue, ouïe, poursuite, fuite)
@@ -155,5 +177,5 @@ public/js/art.js      motifs dessinés par le code (murs, meubles, tapis…) et 
 public/textures/      photos des matières (Poly Haven, domaine public)
 public/js/hud.js      interface par-dessus la vue : crânes, équipe, repères, plan, apparitions
 public/js/main.js     écrans, réseau, déplacement du joueur, boucle de jeu (+ input.js, audio.js)
-test/                 tests du réseau avec un faux Steam
+test/                 tests du réseau (faux Steam) et de la mise à jour (faux GitHub)
 ```

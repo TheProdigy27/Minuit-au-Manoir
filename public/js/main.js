@@ -92,6 +92,7 @@ async function checkSteam(retry = false) {
   steamOk = info.ok;
   $('#steamError').hidden = info.ok || testWindow;
   $('#steamDetail').textContent = info.error;
+  $('#appVersion').textContent = info.version;
   // Le pseudo Steam par défaut, sauf si le joueur a déjà tapé le sien (fenêtre de test : « Test n »)
   if (info.ok && !$('#name').value) $('#name').value = info.name.slice(0, 16);
   setBusy(busy, !$('#cancelBtn').hidden);
@@ -249,6 +250,7 @@ function openMenu() {
   $('#stayBtn').textContent = inGame ? 'Reprendre' : 'Rester';
   $('#quitBtn').textContent = inGame ? 'Quitter la partie' : 'Quitter le salon';
   optionsOnly = G.screen === 'title';
+  showUpdate();
   menu.hidden = false;
   menuOpenedAt = performance.now();
   input.keys.clear();
@@ -298,6 +300,49 @@ for (const b of displayBtns) b.onclick = () => { mam.setDisplay(b.dataset.displa
 $('#displaySetting').hidden = testWindow;
 mam.display().then(showDisplay);
 mam.on('display', showDisplay);
+
+// Mise à jour : l'application télécharge la nouvelle version en arrière-plan, le bouton la lance.
+// L'écran titre l'annonce ; les options montrent aussi la version du jeu et cherchent à la demande.
+const UPDATE = {
+  downloading: s => `Nouvelle version ${s.version} : téléchargement… ${Math.round(s.progress * 100)} %`,
+  ready: s => `La version ${s.version} est prête. Tout le monde doit avoir la même pour jouer ensemble.`,
+  failed: s => `La version ${s.version} n’a pas pu être téléchargée.`,
+  manual: s => `La version ${s.version} est sortie : téléchargez-la sur GitHub.`,
+};
+const UPDATE_OPTION = {
+  checking: () => 'Recherche d’une mise à jour…',
+  latest: () => 'Le jeu est à jour.',
+  unreachable: () => 'Impossible de joindre GitHub : vérifiez la connexion à internet.',
+  ready: s => `La version ${s.version} est prête. Revenez à l’écran titre pour redémarrer.`, // en salon ou en partie
+};
+const UPDATE_BTN = { ready: 'Redémarrer et mettre à jour', failed: 'Réessayer', manual: 'Ouvrir la page de téléchargement' };
+let update = { state: 'none' };
+function showUpdate(s = update) {
+  update = s;
+  $('#update').hidden = !UPDATE[s.state];
+  if (UPDATE[s.state]) {
+    $('#updateText').textContent = UPDATE[s.state](s);
+    $('#updateBar').hidden = s.state !== 'downloading';
+    $('#updateBar').value = s.progress || 0;
+    $('#updateBtn').hidden = !UPDATE_BTN[s.state];
+    $('#updateBtn').textContent = UPDATE_BTN[s.state] || '';
+  }
+  // Options : redémarrer depuis le salon ou une partie ferait quitter les autres joueurs
+  const away = s.state === 'ready' && G.screen !== 'title';
+  $('#updateInfo').textContent = ((!away && UPDATE[s.state]) || UPDATE_OPTION[s.state])?.(s) ?? '';
+  $('#updateCheck').hidden = away || s.state === 'downloading';
+  $('#updateCheck').disabled = s.state === 'checking';
+  $('#updateCheck').textContent = UPDATE_BTN[s.state] || 'Rechercher une mise à jour';
+}
+mam.update().then(showUpdate);
+mam.on('update', showUpdate);
+$('#updateBtn').onclick = () => { mam.updateGo(); sound.click(); };
+$('#updateCheck').onclick = () => {
+  if (UPDATE_BTN[update.state]) mam.updateGo();
+  else mam.checkUpdate();
+  sound.click();
+};
+$('#updateSetting').hidden = testWindow;
 
 addEventListener('keydown', e => {
   if (e.code === 'Escape') {

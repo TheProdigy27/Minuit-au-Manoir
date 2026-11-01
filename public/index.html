@@ -37,6 +37,11 @@
     <p id="steamDetail" class="detail"></p>
     <button id="retryBtn" type="button" class="btn">Réessayer</button>
   </div>
+  <div id="update" class="panel update" role="status" hidden>
+    <p id="updateText"></p>
+    <progress id="updateBar" max="1"></progress>
+    <button id="updateBtn" type="button" class="btn"></button>
+  </div>
   <div class="quit-btns">
     <button id="titleOptionsBtn" type="button" class="btn">⚙ Options</button>
     <button id="titleExitBtn" type="button" class="btn">Quitter le jeu</button>
@@ -114,6 +119,11 @@
         <button type="button" class="chip" data-display="borderless">Plein écran fenêtré</button>
         <button type="button" class="chip" data-display="windowed">Fenêtré</button>
       </div>
+    </div>
+    <div id="updateSetting" class="setting" role="group" aria-label="Mises à jour">
+      <span>Mises à jour · version <span id="appVersion"></span></span>
+      <p id="updateInfo" class="update-info" role="status"></p>
+      <button id="updateCheck" type="button" class="btn"></button>
     </div>
     <button id="optionsDone" type="button" class="btn">Retour</button>
   </div>
