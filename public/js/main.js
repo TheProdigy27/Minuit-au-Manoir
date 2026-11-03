@@ -611,7 +611,7 @@ function onEvent(e) {
       if (mine(e.id)) {
         G.jumpscare = 1;
         G.shake = 1.2;
-        sound.scream(0, 1);
+        sound.jumpscare();
       } else {
         const p = G.players.get(e.id);
         say(`✚ ${name(e.id)} est à terre ! Allez l’aider !`, 'red');

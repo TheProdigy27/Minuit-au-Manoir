@@ -4,6 +4,8 @@ const MUSIC_URL = 'audio/menu.mp3';
 const SAMPLES = { scream: 'audio/scream.mp3' };
 const MUSIC_VOLUME = 0.7;
 const MUSIC_FADE = 1.5; // secondes
+const SCREAM_DRIVE = 2.5; // saturation du cri du jumpscare : ~5 dB de plus en volume perçu
+const SCREAM_DUCK = 0.25; // le reste du mix baisse de 12 dB pendant ce cri
 
 export class Sound {
   constructor() {
@@ -25,13 +27,20 @@ export class Sound {
     if (this.ctx) { if (this.ctx.state !== 'running') this.ctx.resume().catch(() => {}); return; }
     const c = (this.ctx = new AudioContext());
     this.master = c.createGain();
+    this.duck = c.createGain();
     const comp = c.createDynamicsCompressor();
     comp.threshold.value = -16;
     comp.ratio.value = 5;
-    this.master.connect(comp).connect(c.destination);
+    this.master.connect(this.duck).connect(comp).connect(c.destination);
     // La musique des menus passe à côté du compresseur et de la réverbération.
     this.musicOut = c.createGain();
     this.musicOut.connect(c.destination);
+    // Le cri du jumpscare aussi, saturé pour passer au-dessus de tout le reste.
+    this.scareIn = c.createWaveShaper();
+    this.scareIn.curve = this.saturation(SCREAM_DRIVE);
+    this.scareIn.oversample = '4x';
+    this.scareOut = c.createGain();
+    this.scareIn.connect(this.scareOut).connect(c.destination);
     this.applyVolume();
     this.verb = c.createConvolver();
     this.verb.buffer = this.impulse(3.2, 2.4);
@@ -61,6 +70,7 @@ export class Sound {
   applyVolume() {
     this.master.gain.setTargetAtTime(0.9 * this.volume.sfx ** 2, this.t, 0.03);
     this.musicOut.gain.setTargetAtTime(this.volume.music ** 2, this.t, 0.03);
+    this.scareOut.gain.setTargetAtTime(this.volume.sfx ** 2, this.t, 0.03);
   }
 
   get t() { return this.ctx.currentTime; }
@@ -87,6 +97,13 @@ export class Sound {
       const x = (i * 2) / n - 1;
       curve[i] = ((3 + k) * x * 20 * (Math.PI / 180)) / (Math.PI + k * Math.abs(x));
     }
+    return curve;
+  }
+
+  // Écrêtage doux (tanh) : son plus dense donc plus fort, pics toujours sous 0 dB.
+  saturation(drive) {
+    const n = 2048, curve = new Float32Array(n);
+    for (let i = 0; i < n; i++) curve[i] = Math.tanh(drive * ((i * 2) / (n - 1) - 1)) / Math.tanh(drive);
     return curve;
   }
 
@@ -408,6 +425,20 @@ export class Sound {
     s.buffer = buf;
     s.connect(this.out(pan, vol));
     s.start();
+  }
+
+  // Jumpscare quand c'est soi qui est attrapé : cri saturé, le reste du jeu s'efface le temps du cri.
+  jumpscare() {
+    const buf = this.samples.scream;
+    if (!this.ctx || !buf) return;
+    const t = this.t, s = this.ctx.createBufferSource(), d = this.duck.gain;
+    s.buffer = buf;
+    s.connect(this.scareIn);
+    s.start(t);
+    d.cancelScheduledValues(t);
+    d.setValueAtTime(d.value, t);
+    d.setTargetAtTime(SCREAM_DUCK, t, 0.015);
+    d.setTargetAtTime(1, t + buf.duration * 0.5, 0.8);
   }
 
   thunder() {
