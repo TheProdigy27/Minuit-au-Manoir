@@ -72,7 +72,8 @@ Pendant la partie, Steam affiche « En jeu : Spacewar » pour tous les joueurs :
   eux, et laissent des **signes** lumineux pour guider les vivants.
 - 🗺 Perdu·e ? Maintenez **Tab** pour consulter le plan de l'étage où vous êtes : il montre les
   pièces, les escaliers et l'étage où ils mènent, et vos amis (ceux des autres étages sont nommés
-  dessous), mais ni les crânes ni la créature.
+  dessous), mais ni les crânes ni la créature. En permanence, une **mini-carte** en bas à droite
+  montre les alentours, tournée dans le sens de votre regard (on peut la masquer dans les options).
 
 La partie se termine quand plus personne n'est debout dans le manoir.
 
@@ -179,7 +180,7 @@ public/js/bc.js       photos compressées pour la carte graphique (dans texworke
 public/js/post.js     développement de l'image : halo des lumières, faisceau dans l'air, grain
 public/js/art.js      motifs dessinés par le code (murs, meubles, tapis…) et plan vu de dessus
 public/textures/      photos des matières (Poly Haven, domaine public)
-public/js/hud.js      interface par-dessus la vue : crânes, équipe, repères, plan, apparitions
+public/js/hud.js      interface par-dessus la vue : crânes, équipe, repères, mini-carte, plan, apparitions
 public/js/main.js     écrans, réseau, déplacement du joueur, boucle de jeu (+ input.js, audio.js)
 test/                 tests du réseau (faux Steam), de la mise à jour (faux GitHub) et du manoir à étages
 ```

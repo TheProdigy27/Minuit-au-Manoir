@@ -31,7 +31,7 @@ const G = {
   local: { x: 0, y: 0, a: 0, p: 0, stamina: CFG.player.stamina, exhausted: false, light: true, moving: false, running: false, act: false, step: 0, bob: 0 },
   // view : les yeux par lesquels on voit (les siens, ceux d'un ami suivi après la fuite, ou la porte)
   view: { x: 0, y: 0, a: 0, p: 0, state: 'alive', bob: 0, moving: false, running: false, who: null },
-  focusRoom: '', spectating: null, reviveTarget: null, needClick: false, showPlan: false,
+  focusRoom: '', spectating: null, reviveTarget: null, needClick: false, showPlan: false, minimap: true,
   messages: [], pings: [], extinguished: new Map(),
   fear: 0, flash: 0, shake: 0, jumpscare: 0,
 };
@@ -314,6 +314,11 @@ for (const el of document.querySelectorAll('[data-vol]')) {
   // Un petit son pour entendre le nouveau volume des effets, même sur l'écran titre
   if (kind === 'sfx') el.onchange = () => sound.click();
 }
+// Mini-carte en bas à droite de l'écran, qu'on peut masquer
+const minimapBtns = document.querySelectorAll('[data-minimap]');
+const showMinimap = on => { G.minimap = on; for (const b of minimapBtns) b.classList.toggle('on', b.dataset.minimap === (on ? '1' : '0')); };
+for (const b of minimapBtns) b.onclick = () => { showMinimap(b.dataset.minimap === '1'); store.set('mam-minimap', b.dataset.minimap); sound.click(); };
+showMinimap(store.get('mam-minimap', '1') === '1');
 // Affichage : c'est l'application qui le garde, pour ouvrir la fenêtre directement dans le bon mode (F11 le change aussi)
 const displayBtns = document.querySelectorAll('[data-display]');
 const showDisplay = mode => { for (const b of displayBtns) b.classList.toggle('on', b.dataset.display === mode); };

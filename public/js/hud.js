@@ -1,8 +1,11 @@
 // Interface dessinée par-dessus la vue 3D : crânes, équipe, lampe, messages, repères vers les amis
-// à terre et la sortie, plan du manoir, et l'apparition de la créature quand elle vous attrape.
+// à terre et la sortie, mini-carte, plan du manoir, et l'apparition de la créature quand elle vous attrape.
 import { CFG } from '/shared/config.js';
 import { floorAt, levelDist } from '/shared/physics.js';
-import { TAU, FONT, TITLE, circle } from './art.js';
+import { TAU, FONT, TITLE, TS, circle } from './art.js';
+
+const MINI_PX = 16; // pixels par case des plans réduits de la mini-carte
+const MINI_RANGE = 9; // cases (mètres) entre le centre de la mini-carte et son bord
 
 function text(c, str, x, y, size, color, align = 'left', font = FONT) {
   c.font = `${Math.round(size)}px ${font}`;
@@ -49,6 +52,7 @@ export class Hud {
     this.ctx = canvas.getContext('2d');
     this.map = null;
     this.plans = null;
+    this.minis = null;
   }
 
   resize() {
@@ -59,7 +63,8 @@ export class Hud {
   }
 
   // Les plans des étages sont teintés une fois pour toutes (un filtre à chaque image, touche Tab
-  // maintenue, coûtait cher).
+  // maintenue, coûtait cher). La mini-carte a les siens, réduits : plus nets qu'un plan entier rétréci
+  // à chaque image, et moins lourds à dessiner.
   setMap(map, plans) {
     this.map = map;
     this.plans = plans.map(plan => {
@@ -69,6 +74,15 @@ export class Hud {
       const c = cv.getContext('2d');
       c.filter = 'sepia(0.55) brightness(0.85)';
       c.drawImage(plan, 0, 0);
+      return cv;
+    });
+    this.minis = this.plans.map(plan => {
+      const cv = document.createElement('canvas');
+      cv.width = Math.round((plan.width * MINI_PX) / TS);
+      cv.height = Math.round((plan.height * MINI_PX) / TS);
+      const c = cv.getContext('2d');
+      c.imageSmoothingQuality = 'high';
+      c.drawImage(plan, 0, 0, cv.width, cv.height);
       return cv;
     });
   }
@@ -90,6 +104,7 @@ export class Hud {
     else {
       this.labels(G, view);
       this.panel(G);
+      if (G.minimap && G.view.who) this.minimap(G);
     }
     if (G.jumpscare > 0) this.scare(G);
     if (G.needClick && !G.showPlan) {
@@ -236,6 +251,77 @@ export class Hud {
       else if (me.state === 'escaped') hint = G.spectating ? `Vous avez fui le manoir ! Vous suivez ${G.spectating.name} · clic pour changer` : 'Vous avez fui le manoir !';
     } else hint = 'Partie en cours : vous jouerez à la prochaine manche.';
     if (hint) text(c, hint, w / 2, h - 28 * u, 17 * u, 'rgba(240,228,205,0.92)', 'center');
+  }
+
+  // Mini-carte en bas à droite : le plan autour des yeux par lesquels on voit, tourné pour que le
+  // regard pointe vers le haut. Les amis de l'étage (au bord quand ils sont loin), les escaliers et la
+  // sortie ; comme sur le plan, ni la créature ni les crânes.
+  minimap(G) {
+    const c = this.ctx, u = this.u, map = this.map, v = G.view, t = G.time;
+    if (!this.minis) return;
+    const R = 72 * u, cx = this.w - R - 22 * u, cy = this.h - R - 22 * u, k = R / MINI_RANGE;
+    const f = floorAt(map, v.x), ox = map.floors[f].ox, rot = -Math.PI / 2 - v.a;
+    const ca = Math.cos(rot), sa = Math.sin(rot);
+    // d'un point du manoir (même étage) à l'écran ; `rim` : ramené sur le bord quand il est trop loin
+    const P = (x, y, rim = 0) => {
+      const dx = (x - v.x) * k, dy = (y - v.y) * k;
+      let sx = dx * ca - dy * sa, sy = dx * sa + dy * ca;
+      const d = Math.hypot(sx, sy), far = d > R - rim;
+      if (rim && far) { sx *= (R - rim) / d; sy *= (R - rim) / d; }
+      return [cx + sx, cy + sy, far];
+    };
+
+    c.save();
+    c.beginPath();
+    c.arc(cx, cy, R, 0, TAU);
+    c.fillStyle = 'rgba(7,6,10,0.8)';
+    c.fill();
+    c.clip();
+    c.translate(cx, cy);
+    c.rotate(rot);
+    c.scale(k, k);
+    c.globalAlpha = 0.9;
+    c.drawImage(this.minis[f], -(v.x - ox), -v.y, map.fw, map.h);
+    c.restore();
+    c.strokeStyle = 'rgba(232,220,200,0.4)';
+    c.lineWidth = 2 * u;
+    c.beginPath();
+    c.arc(cx, cy, R, 0, TAU);
+    c.stroke();
+    text(c, map.floors[f].name, cx, cy - R - 12 * u, 13 * u, 'rgba(232,220,200,0.75)', 'center');
+    text(c, 'N', cx + sa * (R - 10 * u), cy - ca * (R - 10 * u), 12 * u, 'rgba(255,225,190,0.9)', 'center');
+
+    for (const st of map.stairs) {
+      if (st.f !== f && st.f + 1 !== f) continue;
+      const [sx, sy, far] = P(ox + st.x + st.len / 2, st.y + st.wid / 2, 8 * u);
+      if (!far) text(c, st.f === f ? '▲' : '▼', sx, sy, 12 * u, 'rgba(255,225,150,0.95)', 'center');
+    }
+    if (f === map.ground) {
+      const ex = map.exit, [exX, exY, far] = P(ex.x + ex.w / 2, ex.y + 0.5, 10 * u);
+      if (G.exitOpen) text(c, '🚪', exX, exY, 15 * u, `rgba(140,255,160,${0.75 + 0.25 * Math.sin(t * 6)})`, 'center');
+      else if (!far) text(c, '🚪', exX, exY, 13 * u, 'rgba(200,170,255,0.9)', 'center');
+    }
+    for (const id of G.order) {
+      const p = G.players.get(id);
+      if (!p || p === v.who || (p.state !== 'alive' && p.state !== 'down') || floorAt(map, p.x) !== f) continue;
+      const down = p.state === 'down', [px, py, far] = P(p.x, p.y, (down ? 9 : 5) * u);
+      if (down) text(c, '✚', px, py, 16 * u, `rgba(255,70,60,${0.6 + 0.4 * Math.sin(t * 6)})`, 'center');
+      else {
+        c.globalAlpha = far ? 0.6 : 1;
+        circle(c, px, py, 4 * u, p.color);
+        c.globalAlpha = 1;
+      }
+    }
+    // soi (ou l'ami qu'on suit), toujours au centre, le regard vers le haut
+    c.save();
+    c.translate(cx, cy);
+    c.fillStyle = v.who.color;
+    c.strokeStyle = '#000';
+    c.lineWidth = 2 * u;
+    c.beginPath(); c.moveTo(0, -9 * u); c.lineTo(-6 * u, 6 * u); c.lineTo(0, 3 * u); c.lineTo(6 * u, 6 * u); c.closePath();
+    c.stroke();
+    c.fill();
+    c.restore();
   }
 
   // Plan de l'étage où l'on est (touche Tab maintenue) : les pièces, les escaliers et où ils mènent,
