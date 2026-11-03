@@ -11,11 +11,11 @@ ordinateur et où qu'il soit. Les joueurs se retrouvent grâce à Steam : aucun 
 - Un PC sous **Windows**.
 - **Steam** installé, lancé et connecté. Un compte gratuit suffit : rien à acheter ni à installer
   dans Steam. Le jeu passe par *Spacewar*, l'application de test que Valve ouvre à tous les comptes.
-- Le fichier **`Minuit-au-Manoir-3.3.0.exe`**, à télécharger sur la page
+- Le fichier **`Minuit-au-Manoir-3.4.0.exe`**, à télécharger sur la page
   [Releases](https://github.com/TheProdigy27/Minuit-au-Manoir/releases/latest). Rien à installer.
   Tout le monde doit avoir la même version : l'hôte refuse les joueurs qui en ont une autre.
   Le jeu se met à jour tout seul (voir [Mises à jour](#mises-à-jour)).
-  Variante : `Minuit-au-Manoir-3.3.0-win.zip`, le même jeu décompressé, qui démarre plus vite.
+  Variante : `Minuit-au-Manoir-3.4.0-win.zip`, le même jeu décompressé, qui démarre plus vite.
   Dézippez-le, puis lancez `Minuit au Manoir.exe` dans le dossier.
 
 ## Mises à jour
@@ -25,7 +25,7 @@ la télécharge pendant qu'on est sur l'écran titre, puis propose **« Redémar
 un clic, et le jeu se rouvre dans la nouvelle version.
 
 - Avec l'exe, la nouvelle version arrive dans le même dossier, sous son nouveau nom (par exemple
-  `Minuit-au-Manoir-3.4.0.exe`), et l'ancienne est effacée. Un raccourci vers l'ancien fichier est
+  `Minuit-au-Manoir-3.5.0.exe`), et l'ancienne est effacée. Un raccourci vers l'ancien fichier est
   à refaire.
 - Avec le zip, le dossier du jeu est mis à jour sur place.
 - Si le jeu n'a pas le droit d'écrire dans son dossier, le bouton ouvre la page de téléchargement.
@@ -35,7 +35,7 @@ affichent la version installée, et **« Rechercher une mise à jour »** interr
 
 ## Lancer une partie
 
-1. Chacun lance Steam, puis double-clique sur `Minuit-au-Manoir-3.3.0.exe`. Le jeu met quelques
+1. Chacun lance Steam, puis double-clique sur `Minuit-au-Manoir-3.4.0.exe`. Le jeu met quelques
    secondes à s'ouvrir.
    Au premier lancement, Windows peut afficher « Windows a protégé votre ordinateur » (le fichier
    n'est pas signé) : cliquez sur **Informations complémentaires**, puis **Exécuter quand même**.
@@ -150,7 +150,7 @@ npm run dist       fabrique dist/Minuit-au-Manoir-<version>.exe
   retirer. **F12** ouvre les outils de développement.
 - **Publier une mise à jour** : augmentez `version` dans [package.json](package.json) (l'hôte
   n'accepte que les joueurs qui ont la même), `npm run dist`, puis créez une release GitHub avec le
-  tag `v<version>` (par exemple `v3.4.0`) et deux fichiers : l'exe, et le zip de `dist/win-unpacked`
+  tag `v<version>` (par exemple `v3.5.0`) et deux fichiers : l'exe, et le zip de `dist/win-unpacked`
   (son nom doit finir par `-win.zip`). Les jeux déjà installés la trouvent tout seuls : ils regardent
   la dernière release publiée (ni brouillon ni préversion) et reconnaissent les fichiers à leur nom.
 - `dist/win-unpacked/` contient le jeu décompressé : il démarre plus vite que l'exe. On peut le
