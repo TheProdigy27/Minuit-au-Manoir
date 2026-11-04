@@ -19,6 +19,7 @@ const track = p => pending.push(p.finally(() => arrived++));
 let aniso = 1;
 let env = null, envIntensity = 1;
 let packed = false;
+const photos = new Set(); // toutes les textures photo, copies comprises (filtrage changé en jeu : Renderer.setAniso)
 
 export function setAnisotropy(a) {
   aniso = a;
@@ -54,6 +55,11 @@ function encode(url, kind) {
   });
 }
 
+// Les textures photo créées jusqu'ici, copies comprises.
+export function photoTextures() {
+  return photos;
+}
+
 // Reflets posés sur les matières brillantes (voir surface, option env).
 export function setEnvironment(texture, intensity) {
   env = texture;
@@ -74,7 +80,10 @@ function base(set, file) {
       t = new THREE.CompressedTexture([], 1, 1, file === 'diff' ? THREE.RGB_S3TC_DXT1_Format : THREE.RED_GREEN_RGTC2_Format);
       copies.set(t, []);
       // une fois envoyés à la carte graphique (une seule fois pour toutes les copies), les niveaux sont oubliés
-      const sent = () => { for (const c of [t, ...copies.get(t)]) c.mipmaps = []; };
+      const sent = () => {
+        t.userData.sent = true;
+        for (const c of [t, ...copies.get(t)]) c.mipmaps = [];
+      };
       track(encode(url, file === 'diff' ? 'color' : file === 'nor' ? 'normal' : 'data').then(levels => {
         t.image.width = levels[0].width;
         t.image.height = levels[0].height;
@@ -96,6 +105,7 @@ function base(set, file) {
     t.anisotropy = aniso;
     if (file === 'diff') t.colorSpace = THREE.SRGBColorSpace;
     bases.set(key, t);
+    photos.add(t);
   }
   return t;
 }
@@ -114,15 +124,21 @@ export function texturesReady() {
   });
 }
 
-// Une copie de la photo, répétée tous les `size` mètres sur le canal d'UV `channel` (l'image n'est envoyée qu'une fois).
+// Une copie de la photo, répétée tous les `size` mètres sur le canal d'UV `channel` (l'image n'est envoyée
+// qu'une fois). Copier ne change pas l'image : la version de la source reste la même, si bien qu'une copie
+// faite après l'envoi (en début de partie, quand les niveaux ont été oubliés) reprend la texture déjà sur
+// la carte graphique, sans rien renvoyer. Avant cela, une telle copie restait sans texture (lue noire).
 function tex(set, file, size, channel) {
-  const b = base(set, file), t = b.clone();
+  const b = base(set, file), v = b.source.version, t = b.clone();
+  t.source.version = v;
   if (copies.has(b)) {
     copies.get(b).push(t);
-    if (!b.mipmaps.length) t.version = 0; // rien à envoyer à la carte graphique avant l'arrivée de ses niveaux
+    // rien à envoyer à la carte graphique avant l'arrivée de ses niveaux
+    if (!b.mipmaps.length && !b.userData.sent) t.version = 0;
   }
   t.repeat.set(1 / size, 1 / size);
   t.channel = channel;
+  photos.add(t);
   return t;
 }
 

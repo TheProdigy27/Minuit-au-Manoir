@@ -9,8 +9,8 @@ export const TS = 48; // pixels par case du plan
 export const PX = 128; // unités de dessin par mètre des murs et des meubles (une case = un mètre)
 const RES = 2; // pixels par unité de dessin des murs et des meubles
 export const TAU = Math.PI * 2;
-export const FONT = '"IM Fell English", Georgia, serif';
-export const TITLE = 'Creepster, "IM Fell English", Georgia, serif';
+export const FONT = '"EB Garamond", Garamond, Georgia, serif';
+export const TITLE = '"Pirata One", "EB Garamond", Georgia, serif';
 
 export const STYLE = {
   foyer: { floor: 'checker', a: '#4c3e35', b: '#2e2622', wall: '#4a2f3a', trim: '#5e3f2a' },

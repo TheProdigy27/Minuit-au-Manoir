@@ -3,17 +3,28 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; media-src 'self' blob:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; media-src 'self' blob:">
 <title>Minuit au Manoir</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Creepster&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
+<link rel="preload" href="fonts/pirata-one-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/cinzel-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/eb-garamond-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="menu">
+<!-- Le logo tremble comme de l'encre qui bave : un bruit dont le motif change par à-coups -->
+<svg class="defs" aria-hidden="true" focusable="false">
+  <filter id="ink" x="-5%" y="-10%" width="110%" height="120%">
+    <feTurbulence type="fractalNoise" baseFrequency="0.03 0.07" numOctaves="2" seed="1" result="noise">
+      <animate attributeName="seed" values="1;5;2;8;3;6;4" dur="2.8s" calcMode="discrete" repeatCount="indefinite"/>
+    </feTurbulence>
+    <feDisplacementMap in="SourceGraphic" in2="noise" scale="3.5" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+</svg>
 <canvas id="game"></canvas>
 <canvas id="hud"></canvas>
 <div class="fog"></div>
+<div class="vignette"></div>
+<div class="grain"></div>
 
 <section id="loading" class="screen active">
   <h1 class="logo">Minuit<span>au manoir</span></h1>
@@ -51,11 +62,11 @@
     <progress id="updateBar" max="1"></progress>
     <button id="updateBtn" type="button" class="btn"></button>
   </div>
-  <div class="quit-btns">
-    <button id="titleOptionsBtn" type="button" class="btn">⚙ Options</button>
-    <button id="titleExitBtn" type="button" class="btn">Quitter le jeu</button>
-  </div>
-  <p class="hint">🔊 Monte le son, éteins la lumière. <kbd>F11</kbd> : plein écran.</p>
+  <nav class="menu-list row" aria-label="Jeu">
+    <button id="titleOptionsBtn" type="button">Options</button>
+    <button id="titleExitBtn" type="button" class="danger">Quitter le jeu</button>
+  </nav>
+  <p class="hint">Montez le son, éteignez la lumière. <kbd>F11</kbd> : plein écran.</p>
 </section>
 
 <section id="lobby" class="screen">
@@ -72,18 +83,18 @@
     <div class="panel rules">
       <h3>Comment survivre</h3>
       <ul>
-        <li>💀 Trouvez les <b>crânes maudits</b> cachés dans le manoir, à <b>tous les étages</b>. Leur lueur verte se voit dans le noir.</li>
-        <li>🚪 Quand ils sont tous réunis, la <b>grande porte du hall</b> s'ouvre : fuyez !</li>
-        <li>👁 La créature voit les <b>lampes allumées</b> de loin et <b>entend</b> ceux qui courent… ou qui parlent fort : chuchotez !</li>
-        <li>🔦 Braquez vos lampes sur elle pour la <b>repousser</b> (c'est plus efficace à plusieurs).</li>
-        <li>🌑 Éteignez votre lampe pour <b>vous cacher</b>. Les piles s'usent, ramassez-en.</li>
-        <li>✚ Un ami à terre ? Restez près de lui et <b>maintenez l'action</b> pour le relever.</li>
-        <li>👻 Mort ? Vous devenez un fantôme : laissez des <b>signes</b> pour guider les vivants.</li>
-        <li>🎙 Le chat vocal ne porte <b>qu'à quelques pas</b> : les murs et les étages étouffent les voix, et les fantômes ne parlent qu'aux fantômes.</li>
+        <li><span class="ico">💀</span><span>Trouvez les <b>crânes maudits</b> cachés dans le manoir, à <b>tous les étages</b>. Leur lueur verte se voit dans le noir.</span></li>
+        <li><span class="ico">🚪</span><span>Quand ils sont tous réunis, la <b>grande porte du hall</b> s'ouvre&nbsp;: fuyez&nbsp;!</span></li>
+        <li><span class="ico">👁</span><span>La créature voit les <b>lampes allumées</b> de loin et <b>entend</b> ceux qui courent… ou qui parlent fort : chuchotez&nbsp;!</span></li>
+        <li><span class="ico">🔦</span><span>Braquez vos lampes sur elle pour la <b>repousser</b> (c'est plus efficace à plusieurs).</span></li>
+        <li><span class="ico">🌑</span><span>Éteignez votre lampe pour <b>vous cacher</b>, ou glissez-vous dans une <b>armoire</b>, sous un lit… Les piles s'usent, ramassez-en.</span></li>
+        <li><span class="ico">✚</span><span>Un ami à terre&nbsp;? Restez près de lui et <b>maintenez l'action</b> pour le relever.</span></li>
+        <li><span class="ico">👻</span><span>Mort&nbsp;? Vous devenez un fantôme : laissez des <b>signes</b> pour guider les vivants.</span></li>
+        <li><span class="ico">🎙</span><span>Le chat vocal ne porte <b>qu'à quelques pas</b> : les murs et les étages étouffent les voix, et les fantômes ne parlent qu'aux fantômes.</span></li>
       </ul>
       <h3>Commandes</h3>
-      <p class="keys">souris : regarder et viser · ZQSD / WASD : marcher · flèches : avancer et tourner · <kbd>Maj</kbd> courir · <kbd>F</kbd> ou clic droit : lampe · <kbd>E</kbd> ou <kbd>Espace</kbd> : action · <kbd>Tab</kbd> : plan du manoir · <kbd>V</kbd> : parler (en mode « Appuyer sur V »)</p>
-      <p class="keys"><kbd>F11</kbd> plein écran · <kbd>Échap</kbd> menu (options, quitter la partie)</p>
+      <p id="keysHelp" class="keys"></p>
+      <p class="keys"><kbd>F11</kbd> plein écran · <kbd>Échap</kbd> menu (options, touches, quitter la partie)</p>
     </div>
     <div class="panel invite">
       <h3>Inviter des amis</h3>
@@ -108,61 +119,132 @@
 </section>
 
 <div id="menu" class="overlay" hidden>
-  <div id="menuMain" class="panel quit">
+  <div id="menuMain" class="panel quit menu-panel">
     <h3>Menu</h3>
     <p id="menuNote" class="note"></p>
-    <div class="quit-btns">
-      <button id="stayBtn" type="button" class="btn">Rester</button>
-      <button id="optionsBtn" type="button" class="btn">Options</button>
-      <button id="quitBtn" type="button" class="btn">Quitter</button>
-      <button id="exitBtn" type="button" class="btn">Quitter le jeu</button>
-    </div>
+    <nav class="menu-list" aria-label="Menu">
+      <button id="stayBtn" type="button">Rester</button>
+      <button id="optionsBtn" type="button">Options</button>
+      <button id="quitBtn" type="button" class="danger">Quitter</button>
+      <button id="exitBtn" type="button" class="danger">Quitter le jeu</button>
+    </nav>
   </div>
-  <div id="options" class="panel quit options" hidden>
+  <div id="options" class="panel options" hidden>
     <h3>Options</h3>
-    <div class="option-cols">
-    <div>
-    <label class="setting">Musique <input data-vol="music" type="range" min="0" max="100" step="5"></label>
-    <label class="setting">Effets sonores <input data-vol="sfx" type="range" min="0" max="100" step="5"></label>
-    <label class="setting">Voix des autres joueurs <input data-vol="voice" type="range" min="0" max="100" step="5"></label>
-    <div class="setting" role="group" aria-label="Chat vocal">Chat vocal
-      <div class="chips">
-        <button type="button" class="chip" data-voice="open">Activation vocale</button>
-        <button type="button" class="chip" data-voice="ptt">Appuyer sur V</button>
-        <button type="button" class="chip" data-voice="off">Micro coupé</button>
+    <div class="tabs" role="tablist" aria-label="Options">
+      <button type="button" role="tab" class="tab" data-tab="sound">Son et voix</button>
+      <button type="button" role="tab" class="tab" data-tab="keys">Commandes</button>
+      <button type="button" role="tab" class="tab" data-tab="gfx">Graphismes</button>
+      <button type="button" role="tab" class="tab" data-tab="game">Jeu</button>
+    </div>
+
+    <div class="tab-page" data-page="sound" role="tabpanel">
+      <div class="option-cols">
+        <div>
+          <p class="section-title">Volume</p>
+          <label class="setting slider"><span>Musique</span><output data-out="music"></output><input data-vol="music" type="range" min="0" max="100" step="5"></label>
+          <label class="setting slider"><span>Effets sonores</span><output data-out="sfx"></output><input data-vol="sfx" type="range" min="0" max="100" step="5"></label>
+          <label class="setting slider"><span>Voix des autres joueurs</span><output data-out="voice"></output><input data-vol="voice" type="range" min="0" max="100" step="5"></label>
+        </div>
+        <div>
+          <p class="section-title">Chat vocal</p>
+          <div class="setting" role="group" aria-label="Chat vocal">
+            <div class="chips">
+              <button type="button" class="chip" data-voice="open">Activation vocale</button>
+              <button type="button" class="chip" data-voice="ptt">Appuyer pour parler</button>
+              <button type="button" class="chip" data-voice="off">Micro coupé</button>
+            </div>
+          </div>
+          <div id="micSettings">
+            <label class="setting">Micro <select id="micSelect"><option value="">Micro par défaut de Windows</option></select></label>
+            <label class="setting slider"><span id="gateLabel">Seuil de l’activation vocale</span><output id="gateOut"></output><input id="micGate" type="range" min="0" max="100" step="1">
+              <span class="meter" aria-hidden="true"><span id="micLevel"></span><span id="micMark"></span></span>
+            </label>
+          </div>
+          <p id="micInfo" class="mic-info" role="status"></p>
+        </div>
       </div>
     </div>
-    <div id="micSettings">
-      <label class="setting">Micro <select id="micSelect"><option value="">Micro par défaut de Windows</option></select></label>
-      <label class="setting"><span id="gateLabel">Seuil de l’activation vocale</span> <input id="micGate" type="range" min="0" max="100" step="1">
-        <span class="meter" aria-hidden="true"><span id="micLevel"></span><span id="micMark"></span></span>
-      </label>
-    </div>
-    <p id="micInfo" class="mic-info" role="status"></p>
-    </div>
-    <div>
-    <label class="setting">Sensibilité de la souris <input id="sens" type="range" min="0.3" max="3" step="0.1"></label>
-    <div class="setting" role="group" aria-label="Mini-carte">Mini-carte
-      <div class="chips">
-        <button type="button" class="chip" data-minimap="1">Affichée</button>
-        <button type="button" class="chip" data-minimap="0">Masquée</button>
+
+    <div class="tab-page" data-page="keys" role="tabpanel" hidden>
+      <label class="setting slider"><span>Sensibilité de la souris</span><output id="sensOut"></output><input id="sens" type="range" min="0.3" max="3" step="0.1"></label>
+      <div id="binds" class="binds"></div>
+      <p class="bind-note">Lampe : l’allumer ou l’éteindre · Action : relever un ami, se cacher, sortir de sa cachette, laisser un signe (fantôme) · Parler : en mode « appuyer pour parler » du chat vocal.</p>
+      <div class="bind-foot">
+        <p id="bindInfo" class="bind-info" role="status"></p>
+        <button id="bindReset" type="button" class="btn small">Touches par défaut</button>
       </div>
     </div>
-    <div id="displaySetting" class="setting" role="group" aria-label="Affichage">Affichage
-      <div class="chips">
-        <button type="button" class="chip" data-display="fullscreen">Plein écran</button>
-        <button type="button" class="chip" data-display="borderless">Plein écran fenêtré</button>
-        <button type="button" class="chip" data-display="windowed">Fenêtré</button>
+
+    <div class="tab-page" data-page="gfx" role="tabpanel" hidden>
+      <p class="section-title">Qualité graphique</p>
+      <div class="gfx-presets" role="group" aria-label="Qualité graphique">
+        <div class="chips">
+          <button type="button" class="chip" data-preset="auto">Auto</button>
+          <button type="button" class="chip" data-preset="low">Basse</button>
+          <button type="button" class="chip" data-preset="medium">Moyenne</button>
+          <button type="button" class="chip" data-preset="high">Haute</button>
+          <button type="button" class="chip" data-preset="ultra">Ultra</button>
+          <button type="button" class="chip" data-preset="custom" hidden>Personnalisée</button>
+        </div>
+        <p id="presetInfo" class="gfx-info"></p>
+      </div>
+      <div class="gfx-top">
+        <div id="displaySetting">
+          <p class="section-title">Affichage</p>
+          <div class="setting" role="group" aria-label="Affichage">
+            <div class="chips">
+              <button type="button" class="chip" data-display="fullscreen">Plein écran</button>
+              <button type="button" class="chip" data-display="borderless">Plein écran fenêtré</button>
+              <button type="button" class="chip" data-display="windowed">Fenêtré</button>
+            </div>
+          </div>
+        </div>
+        <div>
+          <p class="section-title">Images par seconde</p>
+          <div class="setting" role="group" aria-label="Images par seconde, au plus">
+            <div class="chips">
+              <button type="button" class="chip" data-fps="30">30</button>
+              <button type="button" class="chip" data-fps="60">60</button>
+              <button type="button" class="chip" data-fps="0">Autant que l’écran</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="section-title">Détails</p>
+      <div id="gfxRows" class="gfx">
+        <label class="gfx-row gfx-range" title="Part des pixels de l’écran calculés pour l’image 3D : le réglage qui compte le plus pour la fluidité. L’interface reste nette.">
+          <span class="gfx-name">Résolution 3D</span>
+          <input id="gfxScale" type="range" min="50" max="100" step="5">
+          <output id="gfxScaleOut"></output>
+        </label>
+      </div>
+      <p id="gfxNow" class="gfx-now" role="status"></p>
+    </div>
+
+    <div class="tab-page" data-page="game" role="tabpanel" hidden>
+      <div class="option-cols">
+        <div>
+          <p class="section-title">Interface</p>
+          <div class="setting" role="group" aria-label="Mini-carte">Mini-carte
+            <div class="chips">
+              <button type="button" class="chip" data-minimap="1">Affichée</button>
+              <button type="button" class="chip" data-minimap="0">Masquée</button>
+            </div>
+          </div>
+        </div>
+        <div id="updateSetting">
+          <p class="section-title">Mises à jour</p>
+          <div class="setting">
+            <span class="version">Version <span id="appVersion"></span></span>
+            <p id="updateInfo" class="update-info" role="status"></p>
+            <button id="updateCheck" type="button" class="btn small"></button>
+          </div>
+        </div>
       </div>
     </div>
-    <div id="updateSetting" class="setting" role="group" aria-label="Mises à jour">
-      <span>Mises à jour · version <span id="appVersion"></span></span>
-      <p id="updateInfo" class="update-info" role="status"></p>
-      <button id="updateCheck" type="button" class="btn"></button>
-    </div>
-    </div>
-    </div>
-    <button id="optionsDone" type="button" class="btn">Retour</button>
+
+    <div class="options-foot"><button id="optionsDone" type="button" class="btn">Retour</button></div>
   </div>
 </div>
 

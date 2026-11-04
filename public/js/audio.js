@@ -368,6 +368,14 @@ export class Sound {
     this.tone('square', 1400, 900, t + 0.04, 0.02, 0.4, o);
   }
 
+  // Survol d'un bouton des menus : un coup sourd et un frottement, à peine audibles
+  hover() {
+    if (!this.ctx) return;
+    const t = this.t, o = this.out(0, 0.12);
+    this.tone('sine', 150, 85, t, 0.09, 0.6, o, 0.004);
+    this.hiss(t, 0.07, 0.2, o, 'bandpass', 1600, 700, 1.2);
+  }
+
   tick(high) {
     if (!this.ctx) return;
     this.tone('sine', high ? 1100 : 660, high ? 1100 : 600, this.t, 0.12, 0.5, this.out(0, 0.4));

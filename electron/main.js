@@ -17,6 +17,7 @@ const MIME = {
   '.jpg': 'image/jpeg',
   '.svg': 'image/svg+xml',
   '.mp3': 'audio/mpeg',
+  '.woff2': 'font/woff2',
 };
 const NO_STEAM = 'Steam n’est pas disponible : lancez Steam, connectez-vous, puis réessayez.';
 

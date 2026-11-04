@@ -5,8 +5,9 @@ import { TILE, CFG, COLORS, batteryFactor } from '/shared/config.js';
 import { tileAt, lineOfSight, floorAt, stairAt, levelDist } from '/shared/physics.js';
 import { mulberry32, levelView, generateMap } from '/shared/map.js';
 import * as art from './art.js';
-import { surface, shine, meters, setAnisotropy, setCompression, setEnvironment, texturesReady, texturesLoaded, nightEnvironment } from './materials.js';
+import { surface, shine, meters, setAnisotropy, setCompression, setEnvironment, texturesReady, texturesLoaded, nightEnvironment, photoTextures } from './materials.js';
 import { Post } from './post.js';
+import { resolve as resolveQuality, DEFAULT as DEFAULT_QUALITY } from './quality.js';
 import { playerBody, monsterLimbs, AIM } from './figures.js';
 import { Hud } from './hud.js';
 
@@ -280,6 +281,17 @@ class Builder {
   }
 }
 
+// Échantillons par pixel du lissage des bords que la carte accepte pour l'image en haute dynamique (RGBA16F).
+function maxSamples(gl) {
+  const ctx = gl.getContext();
+  try {
+    const counts = ctx.getInternalformatParameter(ctx.RENDERBUFFER, ctx.RGBA16F, ctx.SAMPLES);
+    return Math.min(gl.capabilities.maxSamples, counts?.length ? Math.max(...counts) : 4);
+  } catch {
+    return Math.min(gl.capabilities.maxSamples, 4);
+  }
+}
+
 // Pré-passe : la profondeur seule, un peu en retrait pour que le même pan la retrouve ensuite à coup sûr.
 const DEPTH = [THREE.FrontSide, THREE.DoubleSide].map(side => new THREE.MeshBasicMaterial({
   side, colorWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
@@ -290,7 +302,8 @@ const DEPTH = [THREE.FrontSide, THREE.DoubleSide].map(side => new THREE.MeshBasi
 // ---------------------------------------------------------------------------
 
 export class Renderer {
-  constructor(canvas, hudCanvas) {
+  // `quality` : réglages de la qualité graphique (voir quality.js et setQuality).
+  constructor(canvas, hudCanvas, quality = DEFAULT_QUALITY) {
     this.cv = canvas;
     // pas d'anticrénelage sur le canvas : l'image est rendue (et lissée) hors écran, voir post.js
     const gl = (this.gl = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' }));
@@ -299,8 +312,13 @@ export class Renderer {
     gl.toneMapping = THREE.ACESFilmicToneMapping;
     gl.toneMappingExposure = 1.25;
     gl.autoClear = false;
-    this.aniso = gl.capabilities.getMaxAnisotropy();
+    // ce que la carte graphique sait faire, puis la qualité choisie : le filtrage des textures doit être
+    // connu avant d'en créer une (voir setAniso)
+    this.limits = { msaa: maxSamples(gl), aniso: gl.capabilities.getMaxAnisotropy() };
+    this.q = resolveQuality(quality, this.limits);
+    this.aniso = this.q.aniso;
     setAnisotropy(this.aniso);
+    this.made = new Set(); // textures dessinées (texture, normalTexture), pour changer leur filtrage
     // reflets très atténués d'une pièce éclairée à la bougie, sur les matières brillantes seulement
     // (métaux, vernis, porcelaine) : sur le bois brut ou le plâtre, ils ne se voyaient pas et coûtaient cher
     this.env = nightEnvironment(gl);
@@ -325,8 +343,7 @@ export class Renderer {
     // La lampe torche : la seule lumière qui projette des ombres. Son verre et son réflecteur
     // dessinent un point chaud cerclé d'un anneau, puis un halo plus faible.
     this.lamp = new THREE.SpotLight(0xfff0d0, 0, 12, CFG.light.cone, 0.05, 1.5);
-    this.lamp.castShadow = true;
-    this.lamp.shadow.mapSize.set(2048, 2048);
+    this.lamp.castShadow = true; // même sans ombres (qualité) : voir setQuality
     this.lamp.shadow.camera.near = 0.1;
     this.lamp.shadow.bias = -0.0002;
     this.lamp.shadow.normalBias = 0.02;
@@ -355,15 +372,72 @@ export class Renderer {
     this.cand = [];
     this.lastT = 0;
     this.ghostView = false;
-    this.quality = 1; // baisse toute seule si l'ordinateur peine (voir adapt)
     this.slow = 0;
     this.lastFrame = 0;
-    this.resize();
+    this.applied = null;
+    this.onAdapt = null; // la qualité automatique vient de baisser (pour les options)
+    this.setQuality(quality);
     addEventListener('resize', () => this.resize());
   }
 
+  // Qualité graphique (réglages de quality.js), changée en jeu sans compiler un seul programme : la carte
+  // des ombres reste déclarée (sans ombres, elle n'est plus dessinée et ne compte plus), les bougies en
+  // trop restent à zéro (la boucle des lumières les saute), le halo et le faisceau dans l'air sont des
+  // réglages du développement de l'image (post.js). Préréglage 'auto' : baissée par adapt si besoin.
+  setQuality(quality) {
+    this.auto = quality.preset === 'auto';
+    this.fps = quality.fps ?? DEFAULT_QUALITY.fps;
+    this.slow = 0;
+    this.apply(resolveQuality(quality, this.limits));
+  }
+
+  apply(q) {
+    const old = this.applied || {};
+    this.q = q;
+    this.applied = { ...q };
+    this.post.samples = q.msaa;
+    this.post.bloom = !!q.bloom;
+    this.post.beamSteps = q.beam;
+    if (q.shadows !== old.shadows) {
+      const sh = this.lamp.shadow;
+      sh.map?.dispose(); // refaite à la bonne taille à la prochaine image
+      sh.map = null;
+      if (q.shadows) sh.mapSize.set(q.shadows, q.shadows);
+      sh.intensity = q.shadows ? 1 : 0;
+      sh.autoUpdate = q.shadows > 0;
+    }
+    if (q.aniso !== old.aniso) this.setAniso(q.aniso);
+    if (q.scale !== old.scale) this.resize();
+  }
+
+  // Filtrage anisotrope : changé directement sur les textures déjà envoyées à la carte graphique (les
+  // images des photos sont libérées après l'envoi : impossible de les renvoyer) ; celles dessinées plus
+  // tard le reçoivent à leur création. Les textures gardent leur valeur de départ (`anisotropy`) : elle
+  // compte dans la clé qui fait partager une même photo à toutes ses copies.
+  setAniso(a) {
+    this.aniso = a;
+    const gl = this.gl, ctx = gl.getContext(), ext = gl.extensions.get('EXT_texture_filter_anisotropic');
+    if (!ext) return;
+    const done = new Set();
+    const set = t => {
+      if (!t?.isTexture || t.isCubeTexture || t.isDataArrayTexture || t.isData3DTexture || t.isCompressedArrayTexture) return;
+      if (t.minFilter !== THREE.LinearMipmapLinearFilter && t.minFilter !== THREE.NearestMipmapLinearFilter) return;
+      const w = gl.properties.get(t).__webglTexture;
+      if (!w || done.has(w)) return;
+      done.add(w);
+      gl.state.bindTexture(ctx.TEXTURE_2D, w);
+      ctx.texParameterf(ctx.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, Math.max(1, Math.min(a, this.limits.aniso)));
+    };
+    for (const t of photoTextures()) set(t);
+    for (const t of this.made) set(t);
+    for (const scene of [this.scene, this.vm.scene]) {
+      scene.traverse(o => { for (const m of [o.material ?? []].flat()) for (const v of Object.values(m)) set(v); });
+    }
+    gl.state.unbindTexture();
+  }
+
   resize() {
-    this.gl.setPixelRatio(Math.min(devicePixelRatio || 1, 1.5) * this.quality);
+    this.gl.setPixelRatio(Math.min(devicePixelRatio || 1, 1.5) * this.q.scale);
     this.gl.setSize(innerWidth, innerHeight, false);
     const size = this.gl.getDrawingBufferSize(tmp2);
     this.post.setSize(size.x, size.y);
@@ -373,19 +447,22 @@ export class Renderer {
   }
 
   texture(cv, repeat = false) {
-    const t = new THREE.CanvasTexture(cv);
+    const t = this.drawn(new THREE.CanvasTexture(cv));
     t.colorSpace = THREE.SRGBColorSpace;
-    t.anisotropy = this.aniso;
-    t.onUpdate = release;
     if (repeat) t.wrapS = t.wrapT = THREE.RepeatWrapping;
     return t;
   }
 
   // Relief d'un motif dessiné (toile de normales, sans correction de couleur).
   normalTexture(normals) {
-    const t = new THREE.CanvasTexture(normals);
+    return this.drawn(new THREE.CanvasTexture(normals));
+  }
+
+  drawn(t) {
     t.anisotropy = this.aniso;
     t.onUpdate = release;
+    this.made.add(t);
+    t.addEventListener('dispose', () => this.made.delete(t));
     return t;
   }
 
@@ -1664,6 +1741,7 @@ export class Renderer {
       o.visible = visible;
       o.frustumCulled = culled;
     }
+    this.setAniso(this.aniso); // textures envoyées entre-temps avec leur valeur de départ
   }
 
   // Au lancement du jeu, derrière l'écran de chargement : un manoir d'essai (le plus varié de quelques-uns
@@ -1763,21 +1841,22 @@ export class Renderer {
     this.eyeLX = lx;
   }
 
-  // Quand les images tombent sous ~40 par seconde pendant quelques secondes : d'abord plus de
-  // lissage des bords, puis moins de pixels à calculer.
+  // Qualité automatique : quand les images tombent sous les deux tiers de la limite choisie (~40 par
+  // seconde pour 60) pendant quelques secondes, d'abord plus de lissage des bords, puis moins de pixels.
   adapt() {
     const now = performance.now(), ms = now - this.lastFrame;
     this.lastFrame = now;
-    if (ms > 200) return; // onglet en arrière-plan, chargement…
-    this.slow = Math.max(0, this.slow + (ms > 25 ? ms / 1000 : -ms / 2000));
-    if (this.slow > 3 && this.post.samples > 0) {
-      this.post.samples = 0;
-      this.slow = 0;
-    } else if (this.slow > 3 && this.quality > 0.55) {
-      this.quality = Math.max(0.55, this.quality - 0.15);
-      this.slow = 0;
-      this.resize();
-    }
+    if (!this.auto || ms > 200) return; // réglée à la main ; onglet en arrière-plan, chargement…
+    const late = 1500 / Math.min(this.fps || 60, 60);
+    this.slow = Math.max(0, this.slow + (ms > late ? ms / 1000 : -ms / 2000));
+    if (this.slow <= 3) return;
+    this.slow = 0;
+    const q = { ...this.q };
+    if (q.msaa > 0) q.msaa = 0;
+    else if (q.scale > 0.55) q.scale = Math.max(0.55, Math.round((q.scale - 0.15) * 100) / 100);
+    else return;
+    this.apply(q);
+    this.onAdapt?.(q);
   }
 
   frame(G) {
@@ -1937,7 +2016,7 @@ export class Renderer {
     if (G.exitOpen) add('exit', map.exit.x + map.exit.w / 2, map.exit.y + 0.2, 1.6, OUTSIDE, 9 * Math.min(1, this.exitAngle), 8);
     for (const c of cand) c.score = c.d - c.range * 0.4 + (lineOfSight(map, ex + map.floors[c.f].ox, eye.y, c.gx, c.y) ? 0 : 5);
     cand.sort((a, b) => a.score - b.score);
-    const want = SLOTS - 2; // deux places restent libres pour celles qui s'éteignent
+    const want = Math.min(SLOTS, this.q.lights) - 2; // deux places restent libres pour celles qui s'éteignent
     const active = [];
     cand.forEach((c, i) => {
       const w0 = this.weights.get(c.key) || 0;

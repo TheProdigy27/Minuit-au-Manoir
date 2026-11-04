@@ -21,7 +21,7 @@ const INSIDE = {
 };
 
 function text(c, str, x, y, size, color, align = 'left', font = FONT) {
-  c.font = `${Math.round(size)}px ${font}`;
+  c.font = `500 ${Math.round(size)}px ${font}`;
   c.textAlign = align;
   c.lineWidth = Math.max(2, size * 0.18);
   c.strokeStyle = 'rgba(0,0,0,0.85)';
@@ -240,7 +240,7 @@ export class Hud {
     c.beginPath(); c.moveTo(15 * u, 0); c.lineTo(-8 * u, -10 * u); c.lineTo(-8 * u, 10 * u); c.closePath(); c.fill();
     c.restore();
     const tag = label ? `${icon} ${label}` : icon;
-    c.font = `${Math.round(13 * u)}px ${FONT}`;
+    c.font = `500 ${Math.round(13 * u)}px ${FONT}`;
     const half = c.measureText(tag).width / 2 + 10 * u;
     text(c, tag, Math.max(half, Math.min(w - half, ax)), ay + (ay > h / 2 ? -26 : 26) * u, 13 * u, color, 'center');
   }
@@ -313,7 +313,7 @@ export class Hud {
       const col = p.state === 'down' ? 'rgba(255,110,100,1)' : p.state === 'dead' ? 'rgba(150,150,160,0.8)' : p.state === 'escaped' ? 'rgba(140,255,160,0.95)' : 'rgba(232,220,200,0.9)';
       const name = p.name + (p === me ? ' (toi)' : '');
       text(c, name, 30 * u, ty, 14 * u, col);
-      c.font = `${Math.round(14 * u)}px ${FONT}`;
+      c.font = `500 ${Math.round(14 * u)}px ${FONT}`;
       text(c, status, 38 * u + c.measureText(name).width, ty, 12 * u, 'rgba(200,190,175,0.7)');
       ty += 22 * u;
     }
@@ -342,22 +342,24 @@ export class Hud {
     if (G.focusRoom) text(c, G.focusRoom, w - 18 * u, 70 * u, 15 * u, 'rgba(232,220,200,0.6)', 'right');
 
     // Indication contextuelle
+    // les touches choisies dans les options (G.keys, tenu à jour par main.js)
     let hint = '';
+    const K = G.keys;
     if (me) {
       const T = G.hideTarget, into = k => HIDES[k].into;
       if (me.state === 'alive' && G.hide) {
         hint = G.shouted?.() ? 'Vous parlez fort : elle va vous entendre !'
-          : `Caché·e ${into(G.hide.kind)} : elle ne vous voit pas… mais elle vous entend · E : sortir`;
+          : `Caché·e ${into(G.hide.kind)} : elle ne vous voit pas… mais elle vous entend · ${K.act} : sortir`;
       } else if (me.state === 'alive') {
-        if (G.reviveTarget) hint = `Maintenez E pour relever ${G.reviveTarget.name}`;
-        else if (T) hint = T.taken ? `Quelqu’un se cache déjà ${into(T.s.k)}` : `E : se cacher ${into(T.s.k)}`;
+        if (G.reviveTarget) hint = `Maintenez ${K.act} pour relever ${G.reviveTarget.name}`;
+        else if (T) hint = T.taken ? `Quelqu’un se cache déjà ${into(T.s.k)}` : `${K.act} : se cacher ${into(T.s.k)}`;
         else if (G.shouted?.()) hint = 'Vous parlez fort : la créature entend votre voix de loin !';
         else if (me.battery <= 0) hint = 'Votre lampe est morte… trouvez des piles !';
-        else if (!G.local.light) hint = 'Lampe éteinte : la créature vous voit moins (F pour rallumer)';
+        else if (!G.local.light) hint = `Lampe éteinte : la créature vous voit moins (${K.light} pour rallumer)`;
         else if (me.battery < 20) hint = 'Les piles faiblissent…';
-        else if (G.time < 14) hint = 'Souris : regarder · ZQSD : se déplacer · Maj : courir · Tab : plan du manoir' + (G.pushToTalk ? ' · V : parler' : '');
+        else if (G.time < 14) hint = `Souris : regarder · ${K.move} : se déplacer · ${K.run} : courir · ${K.plan} : plan du manoir` + (G.pushToTalk ? ` · ${K.talk} : parler` : '');
       } else if (me.state === 'down') hint = `Vous êtes à terre ! Rampez vers vos amis, ils peuvent vous relever (${me.downT} s)`;
-      else if (me.state === 'dead') hint = 'Vous êtes un fantôme : seuls les morts vous entendent. E : laisser un signe aux vivants';
+      else if (me.state === 'dead') hint = `Vous êtes un fantôme : seuls les morts vous entendent. ${K.act} : laisser un signe aux vivants`;
       else if (me.state === 'escaped') hint = G.spectating ? `Vous avez fui le manoir ! Vous suivez ${G.spectating.name} · clic pour changer` : 'Vous avez fui le manoir !';
     } else hint = 'Partie en cours : vous jouerez à la prochaine manche.';
     if (hint) text(c, hint, w / 2, h - 28 * u, 17 * u, 'rgba(240,228,205,0.92)', 'center');
@@ -451,7 +453,7 @@ export class Hud {
     c.strokeRect(x0, y0, map.fw * s, map.h * s);
     text(c, `Plan du manoir · ${map.floors[f].name}`, w / 2, y0 - 46 * u, 28 * u, 'rgba(255,225,190,0.95)', 'center', TITLE);
     // les étages, du bas vers le haut, celui-ci en clair
-    c.font = `${Math.round(14 * u)}px ${FONT}`;
+    c.font = `500 ${Math.round(14 * u)}px ${FONT}`;
     const names = map.floors.map(fl => fl.name), gap = 26 * u;
     let tx = w / 2 - (names.reduce((sum, n) => sum + c.measureText(n).width, 0) + gap * (names.length - 1)) / 2;
     names.forEach((n, i) => {

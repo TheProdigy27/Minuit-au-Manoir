@@ -3,16 +3,23 @@ import { CFG, COLORS, DIFFICULTY, PLAYER_STATES } from '/shared/config.js';
 import { moveBox, angDiff, crossStairs, floorAt, levelDist, solidAt } from '/shared/physics.js';
 import { hideAt, hideEntry } from '/shared/hide.js';
 import { Renderer } from './render.js';
-import { Input } from './input.js';
+import { Input, ACTIONS, RESERVED } from './input.js';
 import { Sound } from './audio.js';
 import { Voice, VOICE_MODES } from './voice.js';
+import * as Quality from './quality.js';
 
 const $ = sel => document.querySelector(sel);
 const params = new URLSearchParams(location.search);
 const testWindow = params.has('test');
 const mam = window.mam; // pont vers l'application (electron/preload.cjs)
+const store = {
+  get(k, d = '') { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
 const canvas = $('#game');
-const renderer = new Renderer(canvas, $('#hud'));
+// qualité graphique (options, Graphismes) : connue avant de créer la moindre texture
+let gfx = Quality.parse(store.get('mam-gfx'));
+const renderer = new Renderer(canvas, $('#hud'), gfx);
 const input = new Input(canvas);
 const sound = new Sound();
 // Chat vocal : la voix part vers l'hôte par l'application, celle des autres en revient (voice.js)
@@ -22,11 +29,6 @@ mam.onVoice((from, data) => voice.receive(from, data));
 
 const r2 = v => Math.round(v * 100) / 100;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-
-const store = {
-  get(k, d = '') { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
-  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
-};
 
 const G = {
   screen: 'title', myId: null, lobby: null, code: '', hosting: false,
@@ -274,6 +276,7 @@ $('#leaveBtn').onclick = () => openMenu();
 const menu = $('#menu');
 let menuOpenedAt = -1e9;
 let optionsOnly = false;
+let listening = null; // options, Commandes : la case qui attend sa nouvelle touche
 function openMenu() {
   if (!menu.hidden) return;
   const others = (G.lobby?.players.length ?? 1) - 1;
@@ -293,18 +296,35 @@ function openMenu() {
   showOptions(optionsOnly);
 }
 function showOptions(on) {
+  stopListening();
   $('#menuMain').hidden = on;
   $('#options').hidden = !on;
   voice.monitor(on); // le niveau du micro s'affiche dans les options
-  if (on) listMics();
+  if (on) { listMics(); input.readLayout(); }
   $('#optionsDone').textContent = optionsOnly ? 'Fermer' : 'Retour';
-  (on ? $('#optionsDone') : $('#stayBtn')).focus();
+  // sur un petit écran, les options défilent : elles s'ouvrent par le haut (titre et onglets)
+  (on ? $('#optionsDone') : $('#stayBtn')).focus({ preventScroll: true });
+  $('#options').scrollTop = 0;
 }
 function closeMenu() {
+  stopListening();
   menu.hidden = true;
   voice.monitor(false);
   if (G.screen === 'game' && input.wantLock) input.lock();
 }
+// Onglets des options : son et voix, commandes, jeu
+const tabBtns = document.querySelectorAll('[data-tab]');
+function showTab(tab) {
+  stopListening();
+  for (const b of tabBtns) {
+    b.classList.toggle('on', b.dataset.tab === tab);
+    b.setAttribute('aria-selected', b.dataset.tab === tab);
+  }
+  for (const page of document.querySelectorAll('[data-page]')) page.hidden = page.dataset.page !== tab;
+  $('#options').scrollTop = 0;
+}
+for (const b of tabBtns) b.onclick = () => { showTab(b.dataset.tab); sound.click(); };
+showTab('sound');
 $('#titleOptionsBtn').onclick = openMenu;
 $('#optionsBtn').onclick = () => showOptions(true);
 $('#optionsDone').onclick = () => (optionsOnly ? closeMenu() : showOptions(false));
@@ -318,24 +338,177 @@ $('#quitBtn').onclick = () => {
 $('#titleExitBtn').onclick = $('#exitBtn').onclick = () => (testWindow ? window.close() : mam.quit());
 input.onUnlock = () => { if (G.screen === 'game' && input.wantLock) openMenu(); };
 
-// Options : sensibilité de la souris et volumes, gardés d'une session à l'autre
+// Options : sensibilité de la souris et volumes, gardés d'une session à l'autre. Chaque curseur affiche sa
+// valeur, et sa piste se remplit jusqu'au bouton (--p, voir style.css).
+const fill = el => el.style.setProperty('--p', `${((el.value - el.min) / (el.max - el.min)) * 100}%`);
 let sensitivity = clamp(parseFloat(store.get('mam-sens', '1')) || 1, 0.3, 3);
+function showSens() {
+  $('#sensOut').textContent = '× ' + sensitivity.toFixed(1).replace('.', ',');
+  fill($('#sens'));
+}
 $('#sens').value = sensitivity;
-$('#sens').oninput = () => { sensitivity = parseFloat($('#sens').value); store.set('mam-sens', sensitivity); };
+$('#sens').oninput = () => { sensitivity = parseFloat($('#sens').value); store.set('mam-sens', sensitivity); showSens(); };
+showSens();
 for (const el of document.querySelectorAll('[data-vol]')) {
-  const kind = el.dataset.vol, key = 'mam-vol-' + kind;
+  const kind = el.dataset.vol, key = 'mam-vol-' + kind, out = $(`[data-out="${kind}"]`);
   const v = parseFloat(store.get(key, '100'));
+  const showVol = () => { out.textContent = `${el.value} %`; fill(el); };
   el.value = Number.isFinite(v) ? clamp(v, 0, 100) : 100;
   sound.setVolume(kind, el.value / 100);
-  el.oninput = () => { sound.setVolume(kind, el.value / 100); store.set(key, el.value); };
+  showVol();
+  el.oninput = () => { sound.setVolume(kind, el.value / 100); store.set(key, el.value); showVol(); };
   // Un petit son pour entendre le nouveau volume des effets, même sur l'écran titre
   if (kind === 'sfx') el.onchange = () => sound.click();
 }
+
+// Touches : on clique sur une case, puis on appuie sur la touche (ou le bouton de la souris) voulue.
+// Deux cases par action ; une touche déjà prise ailleurs y est retirée.
+input.load(store.get('mam-keys', ''));
+const BIND_HELP = 'Cliquez sur une case, puis appuyez sur une touche ou un bouton de la souris.';
+const BIND_WAIT = 'Appuyez sur la touche voulue… Échap : annuler, Suppr : vider la case.';
+const actionLabel = id => ACTIONS.find(a => a.id === id).label;
+let swallowUp = ''; // la touche qu'on vient d'attribuer : son relâchement ne doit rien déclencher
+function bindInfo(text, warn = false) {
+  $('#bindInfo').textContent = text;
+  $('#bindInfo').classList.toggle('warn-text', warn);
+}
+function buildBinds() {
+  const box = $('#binds');
+  box.replaceChildren();
+  for (const a of ACTIONS) {
+    const row = document.createElement('div');
+    row.className = 'bind';
+    const name = document.createElement('span');
+    name.className = 'bind-name';
+    name.textContent = a.label;
+    row.append(name);
+    for (const slot of [0, 1]) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'keycap';
+      b.dataset.act = a.id;
+      b.dataset.slot = slot;
+      b.onclick = () => listen(listening === b ? null : b);
+      row.append(b);
+    }
+    box.append(row);
+  }
+}
+function showBinds() {
+  for (const b of document.querySelectorAll('.keycap')) {
+    const code = input.binds[b.dataset.act][b.dataset.slot], on = b === listening;
+    b.textContent = on ? 'Appuyez…' : input.name(code) || '—';
+    b.classList.toggle('listen', on);
+    b.classList.toggle('empty', !on && !code);
+    b.setAttribute('aria-label', `${actionLabel(b.dataset.act)}, touche ${+b.dataset.slot + 1} : ${input.name(code) || 'aucune'}`);
+  }
+}
+function listen(b) {
+  listening = b;
+  bindInfo(b ? BIND_WAIT : BIND_HELP);
+  showBinds();
+}
+function stopListening() {
+  if (listening) listen(null);
+}
+function assign(code) {
+  const b = listening, id = b.dataset.act;
+  const taken = input.bind(id, +b.dataset.slot, code);
+  store.set('mam-keys', input.save());
+  swallowUp = code;
+  listening = null;
+  refreshKeys();
+  bindInfo(taken ? `${input.name(code)} n’est plus attribuée à « ${actionLabel(taken)} ».` : BIND_HELP, !!taken);
+  sound.click();
+}
+// Pendant l'attente, la touche pressée ne va ni au jeu ni au menu (Échap ne le ferme pas).
+addEventListener('keydown', e => {
+  if (!listening) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  if (e.repeat) return;
+  if (e.code === 'Escape') listen(null);
+  else if (e.code === 'Delete') assign('');
+  else if (RESERVED.has(e.code)) bindInfo('Cette touche est réservée : choisissez-en une autre.', true);
+  else assign(e.code);
+}, true);
+addEventListener('keyup', e => {
+  if (!swallowUp || e.code !== swallowUp) return;
+  swallowUp = '';
+  e.preventDefault();
+  e.stopImmediatePropagation();
+}, true);
+// Un bouton de la souris (sauf le gauche : cliquer ailleurs annule, sur une autre case la choisit)
+addEventListener('mousedown', e => {
+  if (!listening) return;
+  if (e.button === 0) {
+    if (!listening.contains(e.target)) listen(null);
+    return;
+  }
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  assign('Mouse' + e.button);
+}, true);
+addEventListener('contextmenu', e => { if (!menu.hidden) e.preventDefault(); });
+$('#bindReset').onclick = () => {
+  stopListening();
+  input.reset();
+  store.set('mam-keys', input.save());
+  refreshKeys();
+  bindInfo('Touches par défaut rétablies.');
+  sound.click();
+};
+buildBinds();
+bindInfo(BIND_HELP);
+
+// Les touches choisies, partout où elles s'affichent : options, salon, indications à l'écran (G.keys)
+function refreshKeys() {
+  G.keys = { act: input.key('act'), light: input.key('light'), plan: input.key('plan'), run: input.key('run'), talk: input.key('talk'), move: input.moveKeys() };
+  showBinds();
+  showKeysHelp();
+  showVoice();
+}
+function showKeysHelp() {
+  const p = $('#keysHelp'), kbd = s => Object.assign(document.createElement('kbd'), { textContent: s });
+  const parts = [
+    { text: 'souris : regarder et viser' },
+    { keys: [input.moveKeys()], text: 'marcher' },
+    { keys: [input.key('turnL'), input.key('turnR')], sep: ' ', text: 'tourner' },
+    { keys: input.names('run'), text: 'courir' },
+    { keys: input.names('light'), text: 'lampe' },
+    { keys: input.names('act'), text: 'action (relever, se cacher, signe)' },
+    { keys: input.names('plan'), text: 'plan du manoir' },
+    { keys: input.names('talk'), text: 'parler (mode « appuyer pour parler »)' },
+  ];
+  p.replaceChildren();
+  parts.forEach((part, i) => {
+    if (i) p.append(' · ');
+    const span = document.createElement('span'); // sans retour à la ligne au milieu
+    if (part.keys) {
+      if (!part.keys.length) span.append('(aucune touche)');
+      part.keys.forEach((k, j) => span.append(...(j ? [part.sep ?? ' ou '] : []), kbd(k)));
+      span.append('\u00a0: ');
+    }
+    span.append(part.text);
+    p.append(span);
+  });
+}
+
+// Survol des boutons des menus : un son discret
+let hovered = null, hoverAt = 0;
+document.addEventListener('pointerover', e => {
+  const el = e.target.closest?.('.btn, .menu-list button, .chip, .tab, .keycap, .swatch');
+  if (el === hovered) return;
+  hovered = el;
+  if (!el || el.disabled || performance.now() - hoverAt < 70) return;
+  hoverAt = performance.now();
+  sound.hover();
+});
 // Chat vocal : mode, micro, seuil de l'activation vocale (sous le curseur, le niveau du micro en direct)
 const voiceBtns = document.querySelectorAll('[data-voice]');
 const VOICE_HINT = {
   open: 'Parlez : quand la barre dépasse le trait rouge, les joueurs proches vous entendent… et la créature aussi.',
-  ptt: 'Maintenez V pour parler : les joueurs proches vous entendent, la créature aussi.',
+  ptt: () => `Maintenez ${input.names('talk').join(' ou ') || 'la touche « Parler » (à choisir dans Commandes)'} pour parler : les joueurs proches vous entendent, la créature aussi.`,
   off: 'Vous entendez les autres, mais eux ne vous entendent pas (la créature non plus).',
 };
 function showVoice() {
@@ -344,9 +517,12 @@ function showVoice() {
   // En activation vocale, le seuil se règle au-dessus du niveau du micro ; sinon, le niveau seul.
   const open = voice.mode === 'open';
   $('#gateLabel').textContent = open ? 'Seuil de l’activation vocale' : 'Niveau du micro';
-  $('#micGate').hidden = $('#micMark').hidden = !open;
+  $('#micGate').hidden = $('#micMark').hidden = $('#gateOut').hidden = !open;
   $('#micMark').style.left = `${voice.gate * 100}%`;
-  $('#micInfo').textContent = testWindow ? 'Fenêtre de test : elle n’utilise pas le micro.' : voice.error || VOICE_HINT[voice.mode];
+  $('#gateOut').textContent = `${Math.round(voice.gate * 100)} %`;
+  fill($('#micGate'));
+  const hint = VOICE_HINT[voice.mode];
+  $('#micInfo').textContent = testWindow ? 'Fenêtre de test : elle n’utilise pas le micro.' : voice.error || (typeof hint === 'function' ? hint() : hint);
 }
 async function listMics() {
   const list = await voice.devices(), sel = $('#micSelect');
@@ -368,7 +544,8 @@ $('#micGate').oninput = () => { voice.gate = $('#micGate').value / 100; store.se
 for (const b of voiceBtns) b.onclick = () => { voice.setMode(b.dataset.voice); store.set('mam-voice', voice.mode); showVoice(); sound.click(); };
 $('#micSelect').onchange = () => { voice.setDevice($('#micSelect').value); store.set('mam-mic', voice.device); showVoice(); };
 voice.onChange = () => { showVoice(); if (!$('#options').hidden) listMics(); };
-showVoice();
+refreshKeys(); // (montre aussi le chat vocal, dont l'aide nomme la touche pour parler)
+input.onLayout = refreshKeys; // la disposition du clavier est connue : « Z » plutôt que « W » en AZERTY
 const micLevel = $('#micLevel');
 // Pendant les options : le niveau du micro ; au salon : qui parle
 let talkCheck = 0;
@@ -394,6 +571,99 @@ for (const b of displayBtns) b.onclick = () => { mam.setDisplay(b.dataset.displa
 $('#displaySetting').hidden = testWindow;
 mam.display().then(showDisplay);
 mam.on('display', showDisplay);
+
+// Graphismes : un préréglage ou chaque détail à la main, appliqués aussitôt (même en partie, sans
+// figer le jeu : voir Renderer.setQuality), et la limite d'images par seconde (boucle plus bas).
+const GFX = {
+  msaa: ['Lissage des bords', { 0: 'Non', 2: '2×', 4: '4×', 8: '8×' }, 'Adoucit les contours en escalier des objets. Coûteux pour les petites cartes graphiques.'],
+  shadows: ['Ombres', { 0: 'Non', 1024: 'Basses', 2048: 'Hautes', 4096: 'Ultra' }, 'Ombres projetées par votre lampe : plus elles sont fines, plus leurs bords sont nets.'],
+  lights: ['Éclairage', { 6: 'Réduit', 9: 'Moyen', 12: 'Complet' }, 'Nombre de bougies et de lueurs proches qui éclairent vraiment la pièce autour de vous.'],
+  beam: ['Faisceau dans l’air', { 0: 'Non', 8: 'Bas', 16: 'Haut', 24: 'Ultra' }, 'Le faisceau de votre lampe rendu visible par la poussière en suspension.'],
+  bloom: ['Halo lumineux', { 0: 'Non', 1: 'Oui' }, 'Halo qui bave autour des flammes et des lumières vives.'],
+  aniso: ['Filtrage des textures', { 1: 'Non', 4: '4×', 8: '8×', 16: '16×' }, 'Netteté des sols et des murs vus de biais.'],
+};
+const PRESET_INFO = {
+  auto: 'Haute, puis baissée toute seule si les images ralentissent : d’abord le lissage des bords, puis la résolution.',
+  low: 'Pour les petites cartes graphiques et les ordinateurs portables.',
+  medium: 'Un bon compromis pour la plupart des ordinateurs.',
+  high: 'Le manoir tel qu’il a été pensé.',
+  ultra: 'Pour les cartes graphiques puissantes : ombres et contours plus fins.',
+  custom: 'Vos propres réglages.',
+};
+const limits = renderer.limits;
+for (const [key, [name, labels, tip]] of Object.entries(GFX)) {
+  const row = document.createElement('div'), label = document.createElement('span'), chips = document.createElement('div');
+  row.className = 'gfx-row';
+  row.title = tip;
+  row.setAttribute('role', 'group');
+  row.setAttribute('aria-label', name);
+  label.className = 'gfx-name';
+  label.textContent = name;
+  chips.className = 'chips';
+  for (const v of Quality.CHOICES[key]) {
+    if (key in limits && v > Math.max(1, limits[key])) continue; // la carte graphique ne sait pas
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip';
+    b.dataset.gfx = key;
+    b.dataset.v = v;
+    b.textContent = labels[v];
+    b.onclick = () => { changeGfx(key, v); sound.click(); };
+    chips.append(b);
+  }
+  row.append(label, chips);
+  $('#gfxRows').append(row);
+}
+// Un détail change : les autres restent comme affichés (en qualité automatique, peut-être déjà baissés).
+function changeGfx(key, v) {
+  const from = gfx.preset === 'auto' ? { ...renderer.q, preset: 'custom', fps: gfx.fps } : gfx;
+  setGfx(Quality.change(from, key, v, limits));
+}
+function setGfx(s) {
+  gfx = s;
+  store.set('mam-gfx', Quality.serialize(s));
+  renderer.setQuality(s);
+  showGfx();
+}
+function showGfx() {
+  const q = renderer.q;
+  for (const b of document.querySelectorAll('[data-preset]')) b.classList.toggle('on', b.dataset.preset === gfx.preset);
+  $('[data-preset="custom"]').hidden = gfx.preset !== 'custom';
+  $('#presetInfo').textContent = PRESET_INFO[gfx.preset];
+  for (const b of document.querySelectorAll('[data-gfx]')) b.classList.toggle('on', +b.dataset.v === q[b.dataset.gfx]);
+  for (const b of document.querySelectorAll('[data-fps]')) b.classList.toggle('on', +b.dataset.fps === gfx.fps);
+  $('#gfxScale').value = Math.round(q.scale * 100);
+  $('#gfxScaleOut').textContent = `${$('#gfxScale').value} %`;
+  fill($('#gfxScale'));
+}
+for (const b of document.querySelectorAll('[data-preset]')) b.onclick = () => { setGfx(Quality.choose(gfx, b.dataset.preset)); sound.click(); };
+for (const b of document.querySelectorAll('[data-fps]')) b.onclick = () => { setGfx(Quality.change(gfx, 'fps', +b.dataset.fps)); sound.click(); };
+$('#gfxScale').oninput = () => changeGfx('scale', $('#gfxScale').value / 100);
+renderer.onAdapt = showGfx; // la qualité automatique vient de baisser : les détails le montrent
+showGfx();
+// En partie, les images par seconde du moment, pour juger de l'effet des réglages
+let fpsFrames = 0, fpsSince = 0, fpsShown = null;
+function showFps(now) {
+  const open = !menu.hidden && !$('#options').hidden;
+  if (!open || !fpsSince) {
+    fpsSince = open ? now : 0;
+    fpsFrames = 0;
+    if (open && G.screen !== 'game') writeFps(-1);
+    return;
+  }
+  if (now - fpsSince < 500) return;
+  const fps = Math.round((fpsFrames * 1000) / (now - fpsSince));
+  fpsFrames = 0;
+  fpsSince = now;
+  writeFps(G.screen === 'game' ? fps : -1);
+}
+function writeFps(fps) {
+  if (fps === fpsShown) return;
+  fpsShown = fps;
+  const p = $('#gfxNow');
+  if (fps < 0) p.textContent = 'Les réglages s’appliquent aussitôt. En partie, ce menu montre aussi les images par seconde.';
+  else p.replaceChildren('En ce moment : ', Object.assign(document.createElement('b'), { textContent: fps }), fps > 1 ? ' images par seconde.' : ' image par seconde.');
+}
 
 // Mise à jour : l'application télécharge la nouvelle version en arrière-plan, le bouton la lance.
 // L'écran titre l'annonce ; les options montrent aussi la version du jeu et cherchent à la demande.
@@ -1030,9 +1300,9 @@ function sendInput(now) {
 
 const IDLE = { fwd: 0, side: 0, turn: 0, look: { x: 0, y: 0 }, run: false, act: false, actPressed: false, toggleLight: false, next: false, plan: false };
 
-// Sur un écran rapide (120 Hz, 144 Hz…), une image sur deux (ou plus) seulement : 60 à 80 images par
-// seconde suffisent ici, et la carte graphique travaille deux fois moins. L'écran se mesure au plus
-// court intervalle entre deux appels, les appels sautés comptant aussi.
+// Au plus les images par seconde choisies (options, Graphismes) : sur un écran rapide (120 Hz, 144 Hz…)
+// limité à 60, une image sur deux (ou plus) seulement, et la carte graphique travaille deux fois moins.
+// L'écran se mesure au plus court intervalle entre deux appels, les appels sautés comptant aussi.
 let last = performance.now(), lastCall = last, refresh = 1000 / 60, fastest = Infinity, sampleUntil = 0, skipped = 0;
 function loop(now) {
   requestAnimationFrame(loop);
@@ -1044,8 +1314,10 @@ function loop(now) {
     fastest = Infinity;
     sampleUntil = now + 2000;
   }
-  if (++skipped < Math.floor(1000 / 60 / refresh + 0.1)) return;
+  showFps(now);
+  if (++skipped < Quality.frameSkip(gfx.fps, refresh)) return;
   skipped = 0;
+  fpsFrames++;
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   if (G.screen === 'game' && G.map) {
@@ -1062,7 +1334,7 @@ function loop(now) {
     G.needClick = input.wantLock && menu.hidden && !input.locked;
     renderer.frame(G);
   }
-  voice.ptt = input.keys.has('KeyV');
+  voice.ptt = input.held('talk');
   G.pushToTalk = voice.mode === 'ptt' && voice.supported;
   voice.update(G);
   showTalk(now);
