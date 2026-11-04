@@ -1,9 +1,11 @@
 // Côté page : écrans, réseau (relayé par l'application, via Steam), déplacement du joueur local et boucle de rendu.
 import { CFG, COLORS, DIFFICULTY, PLAYER_STATES } from '/shared/config.js';
-import { moveBox, angDiff, crossStairs, floorAt, levelDist } from '/shared/physics.js';
+import { moveBox, angDiff, crossStairs, floorAt, levelDist, solidAt } from '/shared/physics.js';
+import { hideAt, hideEntry } from '/shared/hide.js';
 import { Renderer } from './render.js';
 import { Input } from './input.js';
 import { Sound } from './audio.js';
+import { Voice, VOICE_MODES } from './voice.js';
 
 const $ = sel => document.querySelector(sel);
 const params = new URLSearchParams(location.search);
@@ -13,6 +15,10 @@ const canvas = $('#game');
 const renderer = new Renderer(canvas, $('#hud'));
 const input = new Input(canvas);
 const sound = new Sound();
+// Chat vocal : la voix part vers l'hôte par l'application, celle des autres en revient (voice.js)
+const voice = new Voice(sound, data => { if (linked) mam.voice(data); });
+voice.canCapture = !testWindow;
+mam.onVoice((from, data) => voice.receive(from, data));
 
 const r2 = v => Math.round(v * 100) / 100;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -32,9 +38,15 @@ const G = {
   // view : les yeux par lesquels on voit (les siens, ceux d'un ami suivi après la fuite, ou la porte)
   view: { x: 0, y: 0, a: 0, p: 0, state: 'alive', bob: 0, moving: false, running: false, who: null },
   focusRoom: '', spectating: null, reviveTarget: null, needClick: false, showPlan: false, minimap: true,
+  // hide : sa cachette ({ s, kind, x, y, a, ex, ey }) ; hideTarget : celle qu'on vise ({ s, taken }) ;
+  // hidePending : on attend la réponse de l'hôte jusqu'à cet instant (immobile en attendant)
+  hide: null, hideTarget: null, hidePending: 0,
   messages: [], pings: [], extinguished: new Map(),
   fear: 0, flash: 0, shake: 0, jumpscare: 0,
 };
+G.talks = id => voice.speaking(id, G.myId); // pour le HUD : qui parle (et qu'on entend) en ce moment
+G.voiceCarry = () => voice.carrying(); // jusqu'où la créature entend notre voix, en cases
+G.shouted = () => voice.shouted();
 
 // ---------------------------------------------------------------------------
 // Écrans
@@ -175,6 +187,7 @@ function backToTitle(message = '', kind = '') {
   linked = false;
   hello = null;
   Object.assign(G, { myId: null, lobby: null, map: null, me: null, code: '', hosting: false });
+  voice.join(false);
   $('#offline').classList.remove('show');
   $('#countdown').textContent = '';
   closeMenu();
@@ -194,7 +207,8 @@ function renderLobby() {
   for (const p of L.players) {
     const li = document.createElement('li');
     const dot = document.createElement('span');
-    dot.className = 'dot';
+    dot.className = 'dot' + (G.talks(p.id) ? ' talk' : '');
+    dot.dataset.id = p.id;
     dot.style.background = p.color;
     dot.style.color = p.color;
     const name = document.createElement('span');
@@ -281,11 +295,14 @@ function openMenu() {
 function showOptions(on) {
   $('#menuMain').hidden = on;
   $('#options').hidden = !on;
+  voice.monitor(on); // le niveau du micro s'affiche dans les options
+  if (on) listMics();
   $('#optionsDone').textContent = optionsOnly ? 'Fermer' : 'Retour';
   (on ? $('#optionsDone') : $('#stayBtn')).focus();
 }
 function closeMenu() {
   menu.hidden = true;
+  voice.monitor(false);
   if (G.screen === 'game' && input.wantLock) input.lock();
 }
 $('#titleOptionsBtn').onclick = openMenu;
@@ -314,6 +331,57 @@ for (const el of document.querySelectorAll('[data-vol]')) {
   // Un petit son pour entendre le nouveau volume des effets, même sur l'écran titre
   if (kind === 'sfx') el.onchange = () => sound.click();
 }
+// Chat vocal : mode, micro, seuil de l'activation vocale (sous le curseur, le niveau du micro en direct)
+const voiceBtns = document.querySelectorAll('[data-voice]');
+const VOICE_HINT = {
+  open: 'Parlez : quand la barre dépasse le trait rouge, les joueurs proches vous entendent… et la créature aussi.',
+  ptt: 'Maintenez V pour parler : les joueurs proches vous entendent, la créature aussi.',
+  off: 'Vous entendez les autres, mais eux ne vous entendent pas (la créature non plus).',
+};
+function showVoice() {
+  for (const b of voiceBtns) b.classList.toggle('on', b.dataset.voice === voice.mode);
+  $('#micSettings').hidden = voice.mode === 'off' || !voice.supported || testWindow;
+  // En activation vocale, le seuil se règle au-dessus du niveau du micro ; sinon, le niveau seul.
+  const open = voice.mode === 'open';
+  $('#gateLabel').textContent = open ? 'Seuil de l’activation vocale' : 'Niveau du micro';
+  $('#micGate').hidden = $('#micMark').hidden = !open;
+  $('#micMark').style.left = `${voice.gate * 100}%`;
+  $('#micInfo').textContent = testWindow ? 'Fenêtre de test : elle n’utilise pas le micro.' : voice.error || VOICE_HINT[voice.mode];
+}
+async function listMics() {
+  const list = await voice.devices(), sel = $('#micSelect');
+  sel.replaceChildren(new Option('Micro par défaut de Windows', ''), ...list.map((d, i) => new Option(d.label || `Micro ${i + 1}`, d.id)));
+  sel.value = list.some(d => d.id === voice.device) ? voice.device : '';
+}
+const savedMode = store.get('mam-voice', 'open'), savedGate = parseFloat(store.get('mam-voice-gate', '45'));
+voice.mode = VOICE_MODES.includes(savedMode) ? savedMode : 'open';
+voice.device = store.get('mam-mic');
+// Sa voix habituelle (pour juger si l'on parle fort), gardée pour ce micro d'un lancement à l'autre
+try {
+  const saved = JSON.parse(store.get('mam-voice-ref', 'null'));
+  if (saved && saved.device === voice.device) voice.seedRef(saved.ref);
+} catch {}
+voice.onRef = ref => store.set('mam-voice-ref', JSON.stringify({ device: voice.device, ref }));
+voice.gate = Number.isFinite(savedGate) ? clamp(savedGate, 0, 100) / 100 : 0.45;
+$('#micGate').value = Math.round(voice.gate * 100);
+$('#micGate').oninput = () => { voice.gate = $('#micGate').value / 100; store.set('mam-voice-gate', $('#micGate').value); showVoice(); };
+for (const b of voiceBtns) b.onclick = () => { voice.setMode(b.dataset.voice); store.set('mam-voice', voice.mode); showVoice(); sound.click(); };
+$('#micSelect').onchange = () => { voice.setDevice($('#micSelect').value); store.set('mam-mic', voice.device); showVoice(); };
+voice.onChange = () => { showVoice(); if (!$('#options').hidden) listMics(); };
+showVoice();
+const micLevel = $('#micLevel');
+// Pendant les options : le niveau du micro ; au salon : qui parle
+let talkCheck = 0;
+function showTalk(now) {
+  if (!$('#options').hidden && !menu.hidden) {
+    micLevel.style.width = `${voice.level * 100}%`;
+    micLevel.classList.toggle('open', voice.mode === 'open' ? voice.level >= voice.gate : voice.talking);
+  }
+  if (G.screen !== 'lobby' || now < talkCheck) return;
+  talkCheck = now + 100;
+  for (const dot of document.querySelectorAll('#playerList .dot')) dot.classList.toggle('talk', G.talks(+dot.dataset.id));
+}
+
 // Mini-carte en bas à droite de l'écran, qu'on peut masquer
 const minimapBtns = document.querySelectorAll('[data-minimap]');
 const showMinimap = on => { G.minimap = on; for (const b of minimapBtns) b.classList.toggle('on', b.dataset.minimap === (on ? '1' : '0')); };
@@ -414,6 +482,7 @@ document.addEventListener('visibilitychange', () => {
 mam.on('status', s => {
   if (s.state === 'connected') {
     linked = true;
+    voice.join(true);
     $('#offline').classList.remove('show');
     if (hello) send(hello);
   } else if (s.state === 'lost') {
@@ -492,8 +561,13 @@ async function startGame(m) {
   G.players.clear();
   G.order = m.players.map(p => p.id);
   for (const p of m.players) {
-    G.players.set(p.id, { ...p, tx: p.x, ty: p.y, ta: p.a, state: 'alive', light: true, running: false, moving: false, disc: false, battery: 100, downT: 0, revive: 0, room: '' });
+    G.players.set(p.id, { ...p, tx: p.x, ty: p.y, ta: p.a, state: 'alive', light: true, running: false, moving: false, disc: false, battery: 100, downT: 0, revive: 0, room: '', hidden: !!p.hide });
   }
+  // De retour dans une partie où l'on s'était caché·e
+  const h = m.players.find(p => p.id === G.myId)?.hide;
+  G.hide = h ? { ...h, kind: map.hides[h.s].k } : null;
+  G.hideTarget = null;
+  G.hidePending = 0;
   G.items = new Map(m.items.map(it => [it.id, { ...it }]));
   G.monsters = m.monsters.map(mo => ({ ...mo, tx: mo.x, ty: mo.y, ta: mo.a, state: 0, lit: 0 }));
   G.skullsFound = m.skullsFound;
@@ -541,6 +615,7 @@ function applySnapshot(m) {
     p.running = !!(flags & 2);
     p.moving = !!(flags & 4);
     p.disc = !!(flags & 8);
+    p.hidden = !!(flags & 16);
     p.battery = battery;
     p.downT = downT;
     p.revive = revive;
@@ -617,12 +692,41 @@ function onEvent(e) {
         G.jumpscare = 1;
         G.shake = 1.2;
         sound.jumpscare();
+        if (e.why) setTimeout(() => say(e.why === 'seen' ? 'Elle vous a vu·e vous cacher…' : 'Elle vous a entendu·e dans votre cachette…', 'red'), 1200);
       } else {
         const p = G.players.get(e.id);
-        say(`✚ ${name(e.id)} est à terre ! Allez l’aider !`, 'red');
+        say(e.why ? `✚ ${name(e.id)} a été tiré·e de sa cachette ! Allez l’aider !` : `✚ ${name(e.id)} est à terre ! Allez l’aider !`, 'red');
         if (p) sound.scream(spatial(p.x, p.y)[0]);
       }
       break;
+    case 'hide': {
+      const p = G.players.get(e.id), s = G.map.hides[e.s];
+      if (p) p.hidden = true;
+      if (mine(e.id)) {
+        G.hide = { s: e.s, kind: s.k, x: e.x, y: e.y, a: e.a, ex: e.ex, ey: e.ey };
+        G.hidePending = 0;
+        // on éteint sa lampe en s'y glissant (F la rallume une fois sorti·e)
+        Object.assign(G.local, { x: e.x, y: e.y, a: e.a, p: 0, light: false, moving: false, running: false });
+        sound.hide(s.k);
+      } else if (s) sound.hide(s.k, ...spatial(e.ex, e.ey, 0.7));
+      break;
+    }
+    case 'unhide': {
+      const p = G.players.get(e.id);
+      if (mine(e.id)) {
+        G.hidePending = 0;
+        if (e.no || !G.hide) break; // refusé (quelqu'un d'autre y était)
+        const kind = G.hide.kind;
+        G.hide = null;
+        Object.assign(G.local, { x: e.x, y: e.y });
+        if (!e.pulled) sound.hide(kind);
+      } else if (p && !e.no) {
+        const s = hideAt(G.map, p.tx, p.ty);
+        p.hidden = false;
+        if (s && !e.pulled) sound.hide(s.k, ...spatial(e.x, e.y, 0.7));
+      }
+      break;
+    }
     case 'revive':
       say(mine(e.id) ? `${name(e.by)} vous a relevé·e !` : `${mine(e.by) ? 'Vous avez' : name(e.by) + ' a'} relevé ${name(e.id)}`, 'green');
       if (mine(e.id) || mine(e.by)) sound.revive();
@@ -731,15 +835,25 @@ function spectate(inp) {
   if (inp.next) G.spectating = alive[(alive.indexOf(G.spectating) + 1) % alive.length];
 }
 
+// Caché·e, on ne voit que par la porte (ou sous le lit) : de combien tourner la tête de chaque côté, et
+// jusqu'où baisser et lever les yeux.
+const HIDE_LOOK = { wardrobe: [1, -0.6, 0.45], cabinet: [1, -0.6, 0.45], bed: [0.95, -0.12, 0.3], coffin: [0.8, -0.25, 0.35] };
+
 function updateLocal(dt, inp) {
-  const me = G.me, L = G.local;
+  const me = G.me, L = G.local, H = G.hide;
   if (!me || me.state === 'escaped') { spectate(inp); return; }
   // Regard : souris (capturée) et flèches gauche/droite
   const a = L.a + inp.look.x * LOOK * sensitivity + inp.turn * TURN * dt;
   L.a = Math.atan2(Math.sin(a), Math.cos(a));
   L.p = clamp(L.p - inp.look.y * LOOK * sensitivity, -1.3, 1.3);
-  // Déplacement par rapport au regard : avancer/reculer, pas de côté
-  let fwd = inp.fwd, side = inp.side;
+  if (H) {
+    const [yaw, down, up] = HIDE_LOOK[H.kind];
+    L.a = H.a + clamp(angDiff(L.a, H.a), -yaw, yaw);
+    L.p = clamp(L.p, down, up);
+  }
+  // Déplacement par rapport au regard : avancer/reculer, pas de côté (immobile caché·e)
+  const still = !!H || G.hidePending > G.time;
+  let fwd = still ? 0 : inp.fwd, side = still ? 0 : inp.side;
   const len = Math.hypot(fwd, side);
   if (len > 1) { fwd /= len; side /= len; }
   const ca = Math.cos(L.a), sa = Math.sin(L.a);
@@ -772,7 +886,14 @@ function updateLocal(dt, inp) {
     [L.x, L.y] = crossStairs(G.map, L.x, L.y);
   }
   if (moving) L.bob += speed * dt;
-  if (inp.toggleLight && me.state === 'alive') { L.light = !L.light; sound.click(); }
+  if (inp.toggleLight && me.state === 'alive' && !H) { L.light = !L.light; sound.click(); }
+  // E : se cacher, ou sortir de sa cachette (relever un ami à terre passe avant)
+  if (inp.actPressed && me.state === 'alive' && G.hidePending <= G.time) {
+    const T = G.hideTarget, enter = !H && T && !T.taken && !G.reviveTarget;
+    if (H) send({ t: 'hide', s: -1 });
+    else if (enter) send({ t: 'hide', s: T.s.id });
+    if (H || enter) G.hidePending = G.time + 1.5;
+  }
   if (moving && me.state !== 'dead') {
     L.step += speed * dt;
     if (L.step > (L.running ? 0.85 : 0.6)) {
@@ -780,7 +901,7 @@ function updateLocal(dt, inp) {
       sound.footstep(L.running ? 0.45 : me.state === 'down' ? 0.1 : 0.2, 0);
     }
   }
-  L.act = inp.act;
+  L.act = inp.act && !H;
   if (inp.actPressed && me.state === 'dead') send({ t: 'ping', x: r2(L.x), y: r2(L.y) });
   me.x = L.x;
   me.y = L.y;
@@ -812,15 +933,16 @@ function updateWorld(dt) {
   G.jumpscare = Math.max(0, G.jumpscare - dt * 1.1);
 
   const map = G.map, me = G.me, L = G.local, v = G.view;
+  // `hide` : la vue de l'intérieur d'une cachette (le genre de meuble), `door` : vers où donne sa porte
   if (me && me.state !== 'escaped') {
-    Object.assign(v, { x: L.x, y: L.y, a: L.a, p: L.p, state: me.state, bob: L.bob, moving: L.moving, running: L.running, who: me });
+    Object.assign(v, { x: L.x, y: L.y, a: L.a, p: L.p, state: me.state, bob: L.bob, moving: L.moving, running: L.running, who: me, hide: G.hide?.kind ?? null, door: G.hide?.a ?? 0 });
   } else if (G.spectating) {
     // après la fuite : on voit par les yeux d'un ami
-    const p = G.spectating;
+    const p = G.spectating, s = p.hidden ? hideAt(map, p.tx, p.ty) : null;
     if (p.moving) v.bob += dt * (p.running ? CFG.player.run : CFG.player.walk);
-    Object.assign(v, { x: p.x, y: p.y, a: p.a, p: 0, state: p.state, moving: p.moving, running: p.running, who: p });
+    Object.assign(v, { x: p.x, y: p.y, a: p.a, p: 0, state: p.state, moving: p.moving, running: p.running, who: p, hide: s?.k ?? null, door: s ? doorOf(s, p.tx, p.ty) : 0 });
   } else {
-    Object.assign(v, { x: map.exit.x + 1, y: map.exit.y - 2.5, a: Math.PI / 2, p: 0, state: 'alive', moving: false, running: false, who: null });
+    Object.assign(v, { x: map.exit.x + 1, y: map.exit.y - 2.5, a: Math.PI / 2, p: 0, state: 'alive', moving: false, running: false, who: null, hide: null, door: 0 });
   }
   const roomAt = (x, y) => {
     const r = map.roomIdx[Math.floor(y) * map.w + Math.floor(x)];
@@ -839,6 +961,8 @@ function updateWorld(dt) {
       if (d < bd) { bd = d; G.reviveTarget = p; }
     }
   }
+
+  aimHide();
 
   // La créature souffle les bougies sur son passage
   for (const m of G.monsters) {
@@ -862,11 +986,37 @@ function updateWorld(dt) {
   sound.update(dt, {
     fear: G.fear,
     ghost: me?.state === 'dead',
+    muffle: v.hide,
     monsters: G.monsters.map(m => {
       const d = levelDist(map, v.x, v.y, m.x, m.y);
       return { pan: pan(m.x, m.y), chase: m.state === 4, vol: m.state === 0 ? 0 : Math.max(0, 1 - d / 13) ** 2 * (m.state === 4 ? 0.55 : 0.28) };
     }),
   });
+}
+
+// La cachette que l'on vise, à portée de main (le regard ne traverse ni mur ni autre meuble haut).
+function aimHide() {
+  const me = G.me, L = G.local, map = G.map;
+  G.hideTarget = null;
+  if (me?.state !== 'alive' || G.hide || !map.hides?.length) return;
+  const ca = Math.cos(L.a), sa = Math.sin(L.a);
+  for (let d = 0.1; d <= CFG.hide.reach + 0.35; d += 0.1) {
+    const x = L.x + ca * d, y = L.y + sa * d, s = hideAt(map, x, y);
+    if (s) {
+      if (hideEntry(map, s, L.x, L.y)) {
+        const taken = [...G.players.values()].some(p => p !== me && p.hidden && p.state === 'alive' && hideAt(map, p.tx, p.ty) === s);
+        G.hideTarget = { s, taken };
+      }
+      return;
+    }
+    if (solidAt(map, Math.floor(x), Math.floor(y), G.exitOpen)) return;
+  }
+}
+
+// Vers où donne la porte d'une cachette, d'après la place de celui qui s'y cache (juste derrière elle).
+function doorOf(s, x, y) {
+  const dx = x - (s.x + s.w / 2), dy = y - (s.y + s.h / 2);
+  return Math.abs(dx) * s.h > Math.abs(dy) * s.w ? (dx > 0 ? 0 : Math.PI) : (dy > 0 ? Math.PI / 2 : -Math.PI / 2);
 }
 
 let lastSend = 0;
@@ -912,11 +1062,15 @@ function loop(now) {
     G.needClick = input.wantLock && menu.hidden && !input.locked;
     renderer.frame(G);
   }
+  voice.ptt = input.keys.has('KeyV');
+  G.pushToTalk = voice.mode === 'ptt' && voice.supported;
+  voice.update(G);
+  showTalk(now);
   input.endFrame();
 }
 requestAnimationFrame(loop);
 
-if (params.has('debug')) Object.assign(window, { __G: G, __R: renderer });
+if (params.has('debug')) Object.assign(window, { __G: G, __R: renderer, __V: voice });
 // Fenêtre de test ouverte par l'hôte (Ctrl+Maj+N) : rejoint la partie de ce PC dès que l'application la relie.
 if (testWindow) {
   $('#name').value = params.get('nom') || 'Test';

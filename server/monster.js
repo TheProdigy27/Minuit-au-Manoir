@@ -1,8 +1,10 @@
 // La créature : elle erre, entend les bruits, voit les lampes allumées, poursuit,
-// et recule quand on lui braque assez longtemps de la lumière dessus.
+// et recule quand on lui braque assez longtemps de la lumière dessus. Elle ne voit pas ceux qui se cachent
+// (armoires, lits…) et ne peut pas les attraper, sauf si elle sait où ils sont : elle les en tire alors.
 import { CFG, batteryFactor } from '../shared/config.js';
 import { moveBox, lineOfSight, clearPath, angDiff, solidAt, distanceField, floorAt, crossStairs, levelDist, stairLinks, linksOf } from '../shared/physics.js';
 import { cellOf } from '../shared/map.js';
+import { front } from '../shared/hide.js';
 
 const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
 
@@ -53,9 +55,30 @@ export class Monster {
     this.target = null; this.lastSeen = null; this.lostT = 0;
     this.exposure = 0; this.cooldown = 0; this.lit = false;
     this.bored = 0; this.stuck = 0; this.fleeFrom = null;
+    this.fetch = null; // { p, why } : le joueur caché qu'elle va tirer de sa cachette
   }
 
   setState(s, t = 0) { this.state = s; this.stateT = t; }
+
+  // Voit-elle ce joueur ? Une lampe allumée de loin, dans le noir seulement de près ; jamais caché.
+  sees(g, p) {
+    if (p.hide || this.state === 'dormant' || this.state === 'flee' || this.state === 'retreat') return false;
+    const M = CFG.monster, d = Math.hypot(p.x - this.x, p.y - this.y);
+    return d < (p.light && p.battery > 0 ? M.sightLit : M.sightDark) * g.diff.sight && lineOfSight(g.map, this.x, this.y, p.x, p.y);
+  }
+
+  // Elle sait où se cache `p` (elle l'a vu y entrer, ou l'entend de tout près) : elle fonce l'en tirer.
+  hunt(g, p, why) {
+    if (this.state === 'dormant' || this.state === 'flee' || this.state === 'retreat') return;
+    if (this.state !== 'chase' || this.target !== p) g.emit('spot', { id: this.id, target: p.id });
+    this.fetch = { p, why };
+    this.setState('chase');
+    this.target = p;
+    this.lostT = 0;
+    this.bored = 0;
+    this.repath = 0;
+    this.lastSeen = { x: p.hide.ex, y: p.hide.ey };
+  }
 
   goTo(map, x, y, exact = false) {
     const p = findPath(map, Math.floor(this.x), Math.floor(this.y), Math.floor(x), Math.floor(y));
@@ -115,6 +138,8 @@ export class Monster {
     this.cooldown = Math.max(0, this.cooldown - dt);
     this.stateT -= dt;
     const alive = g.players.filter(p => p.state === 'alive');
+    // sorti·e de sa cachette avant qu'elle n'arrive : elle le poursuit comme n'importe qui
+    if (this.fetch && (this.fetch.p.state !== 'alive' || !this.fetch.p.hide)) this.fetch = null;
 
     // Lampes braquées sur elle
     let beams = 0, scarer = null, scarerD = Infinity;
@@ -139,13 +164,14 @@ export class Monster {
       this.cooldown = M.stunCooldown;
       this.setState('flee', M.fleeTime);
       this.target = null;
+      this.fetch = null; // un ami a sauvé celui qui était caché
       this.fleeFrom = { x: scarer.x, y: scarer.y };
       this.runFrom(map, scarer.x, scarer.y, 14);
       scarer.stats.stuns++;
       g.emit('stun', { id: this.id, by: scarer.id });
     }
 
-    if (this.state !== 'flee' && this.state !== 'retreat') this.perceive(dt, g, alive);
+    if (this.state !== 'flee' && this.state !== 'retreat' && !this.fetch) this.perceive(dt, g, alive);
 
     let speed = M.speed[this.state] ?? M.speed.wander;
     switch (this.state) {
@@ -155,7 +181,7 @@ export class Monster {
           this.bored = 0;
           const p = alive[Math.floor(Math.random() * alive.length)];
           this.setState('investigate');
-          this.goTo(map, p.x, p.y);
+          this.goTo(map, ...front(p)); // un joueur caché : devant sa cachette (elle ne l'y trouvera pas s'il se tait)
         } else if (!this.path.length) this.wander(g);
         break;
       case 'investigate':
@@ -184,15 +210,23 @@ export class Monster {
     if (this.lit) speed *= M.litSlow;
     this.move(map, speed, dt);
 
-    // Attrape les joueurs à portée
+    // Attrape les joueurs à portée ; arrivée devant une cachette où elle sait quelqu'un, l'en tire
     if (this.state !== 'flee' && this.state !== 'retreat') {
-      for (const p of alive) {
-        if (g.time < p.immune || Math.hypot(p.x - this.x, p.y - this.y) > M.catchDist) continue;
-        g.down(p, this);
+      const f = this.fetch;
+      let caught = null;
+      if (f && Math.hypot(f.p.hide.ex - this.x, f.p.hide.ey - this.y) <= M.catchDist + 0.25) {
+        caught = f.p;
+        this.fetch = null;
+        g.leave(caught, true);
+        g.down(caught, this, f.why);
+      } else {
+        caught = alive.find(p => !p.hide && g.time >= p.immune && Math.hypot(p.x - this.x, p.y - this.y) <= M.catchDist);
+        if (caught) g.down(caught, this);
+      }
+      if (caught) {
         this.setState('retreat', 4);
         this.target = null;
-        this.runFrom(map, p.x, p.y, 12);
-        break;
+        this.runFrom(map, caught.x, caught.y, 12);
       }
     }
   }
@@ -202,8 +236,7 @@ export class Monster {
     let seen = null, sd = Infinity;
     for (const p of alive) {
       const d = Math.hypot(p.x - this.x, p.y - this.y);
-      const range = (p.light && p.battery > 0 ? M.sightLit : M.sightDark) * g.diff.sight;
-      if (d < range && d < sd && lineOfSight(map, this.x, this.y, p.x, p.y)) { seen = p; sd = d; }
+      if (d < sd && this.sees(g, p)) { seen = p; sd = d; }
     }
     if (seen) {
       if (this.state !== 'chase' || this.target !== seen) {
@@ -220,13 +253,16 @@ export class Monster {
     if (this.state === 'chase') {
       this.lostT += dt;
       const t = this.target;
-      if (t && t.state === 'alive' && this.lostT < M.memory) { this.lastSeen = { x: t.x, y: t.y }; return; }
+      if (t && t.state === 'alive' && !t.hide && this.lostT < M.memory) { this.lastSeen = { x: t.x, y: t.y }; return; }
       this.setState('investigate');
       this.target = null;
       this.goTo(map, this.lastSeen.x, this.lastSeen.y);
       return;
     }
-    // Bruits : courir, ramasser un crâne, relever un ami… (les plus forts s'entendent d'un étage à l'autre)
+    // Bruits : courir, ramasser un crâne, relever un ami, parler… (les plus forts s'entendent d'un étage à
+    // l'autre). Elle change de route quand le bruit vient d'ailleurs que là où elle allait : à plus de
+    // 2 cases, ou dès qu'il bouge un peu pour un bruit fort (quelqu'un qui crie en marchant). Celui d'un
+    // joueur caché, elle va voir devant sa cachette ; de tout près, elle sait qu'il est dedans.
     let best = null, score = 0;
     for (const n of g.noises) {
       const d = levelDist(map, this.x, this.y, n.x, n.y);
@@ -234,10 +270,11 @@ export class Monster {
       if (d < r && r - d > score) { best = n; score = r - d; }
     }
     if (!best) return;
-    const goal = this.goal;
-    if (this.state !== 'investigate' || !goal || best.loud || Math.hypot(best.x - goal.x, best.y - goal.y) > 2) {
+    if (best.who?.hide && levelDist(map, this.x, this.y, best.x, best.y) <= CFG.hide.hear) { this.hunt(g, best.who, 'heard'); return; }
+    const goal = this.goal, gx = best.gx ?? best.x, gy = best.gy ?? best.y;
+    if (this.state !== 'investigate' || !goal || Math.hypot(gx - goal.x, gy - goal.y) > (best.loud ? 0.5 : 2)) {
       this.setState('investigate');
-      this.goTo(map, best.x, best.y);
+      this.goTo(map, gx, gy);
       this.bored = 0;
     }
   }

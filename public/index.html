@@ -74,14 +74,15 @@
       <ul>
         <li>💀 Trouvez les <b>crânes maudits</b> cachés dans le manoir, à <b>tous les étages</b>. Leur lueur verte se voit dans le noir.</li>
         <li>🚪 Quand ils sont tous réunis, la <b>grande porte du hall</b> s'ouvre : fuyez !</li>
-        <li>👁 La créature voit les <b>lampes allumées</b> de loin et <b>entend</b> ceux qui courent.</li>
+        <li>👁 La créature voit les <b>lampes allumées</b> de loin et <b>entend</b> ceux qui courent… ou qui parlent fort : chuchotez !</li>
         <li>🔦 Braquez vos lampes sur elle pour la <b>repousser</b> (c'est plus efficace à plusieurs).</li>
         <li>🌑 Éteignez votre lampe pour <b>vous cacher</b>. Les piles s'usent, ramassez-en.</li>
         <li>✚ Un ami à terre ? Restez près de lui et <b>maintenez l'action</b> pour le relever.</li>
         <li>👻 Mort ? Vous devenez un fantôme : laissez des <b>signes</b> pour guider les vivants.</li>
+        <li>🎙 Le chat vocal ne porte <b>qu'à quelques pas</b> : les murs et les étages étouffent les voix, et les fantômes ne parlent qu'aux fantômes.</li>
       </ul>
       <h3>Commandes</h3>
-      <p class="keys">souris : regarder et viser · ZQSD / WASD : marcher · flèches : avancer et tourner · <kbd>Maj</kbd> courir · <kbd>F</kbd> ou clic droit : lampe · <kbd>E</kbd> ou <kbd>Espace</kbd> : action · <kbd>Tab</kbd> : plan du manoir</p>
+      <p class="keys">souris : regarder et viser · ZQSD / WASD : marcher · flèches : avancer et tourner · <kbd>Maj</kbd> courir · <kbd>F</kbd> ou clic droit : lampe · <kbd>E</kbd> ou <kbd>Espace</kbd> : action · <kbd>Tab</kbd> : plan du manoir · <kbd>V</kbd> : parler (en mode « Appuyer sur V »)</p>
       <p class="keys"><kbd>F11</kbd> plein écran · <kbd>Échap</kbd> menu (options, quitter la partie)</p>
     </div>
     <div class="panel invite">
@@ -117,10 +118,29 @@
       <button id="exitBtn" type="button" class="btn">Quitter le jeu</button>
     </div>
   </div>
-  <div id="options" class="panel quit" hidden>
+  <div id="options" class="panel quit options" hidden>
     <h3>Options</h3>
+    <div class="option-cols">
+    <div>
     <label class="setting">Musique <input data-vol="music" type="range" min="0" max="100" step="5"></label>
     <label class="setting">Effets sonores <input data-vol="sfx" type="range" min="0" max="100" step="5"></label>
+    <label class="setting">Voix des autres joueurs <input data-vol="voice" type="range" min="0" max="100" step="5"></label>
+    <div class="setting" role="group" aria-label="Chat vocal">Chat vocal
+      <div class="chips">
+        <button type="button" class="chip" data-voice="open">Activation vocale</button>
+        <button type="button" class="chip" data-voice="ptt">Appuyer sur V</button>
+        <button type="button" class="chip" data-voice="off">Micro coupé</button>
+      </div>
+    </div>
+    <div id="micSettings">
+      <label class="setting">Micro <select id="micSelect"><option value="">Micro par défaut de Windows</option></select></label>
+      <label class="setting"><span id="gateLabel">Seuil de l’activation vocale</span> <input id="micGate" type="range" min="0" max="100" step="1">
+        <span class="meter" aria-hidden="true"><span id="micLevel"></span><span id="micMark"></span></span>
+      </label>
+    </div>
+    <p id="micInfo" class="mic-info" role="status"></p>
+    </div>
+    <div>
     <label class="setting">Sensibilité de la souris <input id="sens" type="range" min="0.3" max="3" step="0.1"></label>
     <div class="setting" role="group" aria-label="Mini-carte">Mini-carte
       <div class="chips">
@@ -139,6 +159,8 @@
       <span>Mises à jour · version <span id="appVersion"></span></span>
       <p id="updateInfo" class="update-info" role="status"></p>
       <button id="updateCheck" type="button" class="btn"></button>
+    </div>
+    </div>
     </div>
     <button id="optionsDone" type="button" class="btn">Retour</button>
   </div>

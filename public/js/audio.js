@@ -6,6 +6,9 @@ const MUSIC_VOLUME = 0.7;
 const MUSIC_FADE = 1.5; // secondes
 const SCREAM_DRIVE = 2.5; // saturation du cri du jumpscare : ~5 dB de plus en volume perçu
 const SCREAM_DUCK = 0.25; // le reste du mix baisse de 12 dB pendant ce cri
+const VOICE_GAIN = 1.3; // voix des autres joueurs (chat vocal), à volume 100 %
+// Fréquence au-dessus de laquelle les sons du manoir s'étouffent, caché·e dans chaque sorte de meuble
+const MUFFLE = { wardrobe: 1400, cabinet: 1400, coffin: 900, bed: 5000 };
 
 export class Sound {
   constructor() {
@@ -19,7 +22,7 @@ export class Sound {
     this.track = null;
     this.musicOn = false;
     this.musicStop = null;
-    this.volume = { music: 1, sfx: 1 };
+    this.volume = { music: 1, sfx: 1, voice: 1 };
     this.samples = {};
   }
 
@@ -31,7 +34,12 @@ export class Sound {
     const comp = c.createDynamicsCompressor();
     comp.threshold.value = -16;
     comp.ratio.value = 5;
-    this.master.connect(this.duck).connect(comp).connect(c.destination);
+    // Caché·e dans un meuble, le manoir s'entend étouffé
+    this.muffle = c.createBiquadFilter();
+    this.muffle.type = 'lowpass';
+    this.muffle.frequency.value = 20000;
+    this.muffle.Q.value = 0.5;
+    this.master.connect(this.muffle).connect(this.duck).connect(comp).connect(c.destination);
     // La musique des menus passe à côté du compresseur et de la réverbération.
     this.musicOut = c.createGain();
     this.musicOut.connect(c.destination);
@@ -41,6 +49,9 @@ export class Sound {
     this.scareIn.oversample = '4x';
     this.scareOut = c.createGain();
     this.scareIn.connect(this.scareOut).connect(c.destination);
+    // Les voix du chat vocal (voice.js) ont leur propre volume, mais baissent aussi pendant le cri.
+    this.voiceOut = c.createGain();
+    this.voiceOut.connect(this.duck);
     this.applyVolume();
     this.verb = c.createConvolver();
     this.verb.buffer = this.impulse(3.2, 2.4);
@@ -71,6 +82,7 @@ export class Sound {
     this.master.gain.setTargetAtTime(0.9 * this.volume.sfx ** 2, this.t, 0.03);
     this.musicOut.gain.setTargetAtTime(this.volume.music ** 2, this.t, 0.03);
     this.scareOut.gain.setTargetAtTime(this.volume.sfx ** 2, this.t, 0.03);
+    this.voiceOut.gain.setTargetAtTime(VOICE_GAIN * this.volume.voice ** 2, this.t, 0.03);
   }
 
   get t() { return this.ctx.currentTime; }
@@ -221,6 +233,7 @@ export class Sound {
     this.growls = [];
     this.tension = null;
     this.inGame = false;
+    if (this.muffle) this.muffle.frequency.setTargetAtTime(20000, this.t, 0.05);
   }
 
   // Grondement continu d'une créature (volume et stéréo selon sa position)
@@ -272,6 +285,7 @@ export class Sound {
       this.nextBeat = t + 60 / (55 + s.fear * 105);
     }
     if (this.tension) this.tension.gain.setTargetAtTime(Math.max(0, s.fear - 0.3) * 0.05, t, 0.4);
+    this.muffle.frequency.setTargetAtTime(MUFFLE[s.muffle] ?? 20000, t, 0.15);
     s.monsters.forEach((m, i) => {
       const g = this.growl(i);
       g.gain.gain.setTargetAtTime(m.vol, t, 0.2);
@@ -517,6 +531,40 @@ export class Sound {
     os.connect(g).connect(bp);
     os.start(t);
     os.stop(t + dur + 0.1);
+  }
+
+  // Se glisser dans une cachette ou en sortir : la porte de l'armoire qui grince puis se referme, le
+  // frottement des draps sous un lit, le couvercle d'un cercueil qui racle.
+  hide(kind, pan = 0, vol = 1) {
+    const c = this.ctx;
+    if (!c) return;
+    const t = this.t, o = this.out(pan, vol);
+    if (kind === 'bed') {
+      this.hiss(t, 0.35, 0.22, o, 'bandpass', 1800, 900, 0.8, 0.08);
+      this.hiss(t + 0.3, 0.3, 0.15, o, 'bandpass', 1400, 700, 0.8, 0.06);
+      this.tone('sine', 90, 50, t + 0.25, 0.12, 0.3, o);
+      return;
+    }
+    if (kind === 'coffin') {
+      this.hiss(t, 0.7, 0.35, o, 'bandpass', 380, 240, 3, 0.05);
+      this.tone('sine', 70, 40, t + 0.72, 0.2, 0.7, o, 0.01);
+      return;
+    }
+    // la porte : un grincement court, puis le loquet
+    const bp = c.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 700 + Math.random() * 300;
+    bp.Q.value = 10;
+    bp.connect(o);
+    const os = c.createOscillator(), g = c.createGain(), dur = 0.45;
+    os.type = 'sawtooth';
+    os.frequency.setValueCurveAtTime(new Float32Array(10).map((_, i) => 90 + 50 * Math.sin(i * 1.3) + Math.random() * 30), t, dur);
+    this.env(g.gain, t, 0.04, 0.5, dur);
+    os.connect(g).connect(bp);
+    os.start(t);
+    os.stop(t + dur + 0.1);
+    this.tone('square', 1600, 900, t + dur + 0.05, 0.02, 0.15, o);
+    this.tone('sine', 120, 60, t + dur + 0.05, 0.08, 0.5, o);
   }
 
   knock() {

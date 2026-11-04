@@ -1,11 +1,24 @@
 // Interface dessinée par-dessus la vue 3D : crânes, équipe, lampe, messages, repères vers les amis
 // à terre et la sortie, mini-carte, plan du manoir, et l'apparition de la créature quand elle vous attrape.
 import { CFG } from '/shared/config.js';
-import { floorAt, levelDist } from '/shared/physics.js';
+import { floorAt, levelDist, angDiff } from '/shared/physics.js';
+import { HIDES, hideAt } from '/shared/hide.js';
 import { TAU, FONT, TITLE, TS, circle } from './art.js';
 
 const MINI_PX = 16; // pixels par case des plans réduits de la mini-carte
 const MINI_RANGE = 9; // cases (mètres) entre le centre de la mini-carte et son bord
+const TALK_GREEN = 'rgba(125,255,154,0.9)'; // anneau autour d'un joueur qui parle
+const HIDE_IN = 0.22; // de la porte d'une cachette aux yeux de celui qui s'y cache (voir hide.js)
+
+// Dessin d'une cachette vue de l'intérieur, en mètres autour des yeux : `top` et `floor`, hauteur du dessus du
+// meuble et du sol ; `gap`, largeur de l'entrebâillement des portes ; `louvers`, lattes d'aération des portes
+// (de `z0` à `z1`, tous les `pitch`, jour de `slit`) ; `crack`, fente du couvercle d'un cercueil.
+const INSIDE = {
+  wardrobe: { top: 0.55, floor: -1.45, gap: 0.045, louvers: { z0: -0.32, z1: 0.42, pitch: 0.032, slit: 0.012 } },
+  cabinet: { top: 0.85, floor: -0.9, gap: 0.05 },
+  coffin: { crack: [[-0.025, 0.055], [-0.13, 0.01]] },
+  bed: {},
+};
 
 function text(c, str, x, y, size, color, align = 'left', font = FONT) {
   c.font = `${Math.round(size)}px ${font}`;
@@ -102,6 +115,7 @@ export class Hud {
     c.textBaseline = 'middle';
     if (G.showPlan) this.drawPlan(G);
     else {
+      if (G.view.hide) this.inside(G, view);
       this.labels(G, view);
       this.panel(G);
       if (G.minimap && G.view.who) this.minimap(G);
@@ -118,6 +132,93 @@ export class Hud {
 
   // Repère au-dessus d'un point du manoir ; hors du champ de vision, une flèche au bord de l'écran
   // indique de quel côté se tourner.
+  // L'anneau autour de sa propre pastille quand on parle : vert, la créature ne vous entend que de près ;
+  // orange, d'aussi loin que si vous couriez ; rouge, vous venez de crier (elle entend à travers murs et
+  // étages ; il le reste aussi longtemps que l'avertissement en bas de l'écran).
+  voiceColor(G, me) {
+    if (me.state !== 'alive' && me.state !== 'down') return TALK_GREEN;
+    if (G.shouted?.()) return 'rgba(255,85,65,0.95)';
+    return (G.voiceCarry?.() ?? 0) >= CFG.noise.run ? 'rgba(255,175,60,0.95)' : TALK_GREEN;
+  }
+
+  // La vue de l'intérieur d'une cachette, accrochée au meuble (elle glisse quand on tourne la tête) :
+  // l'armoire sombre, le jour entre ses portes et par ses lattes ; la fente du couvercle d'un cercueil ;
+  // sous un lit (dessiné en volume, avec son cache-sommier), seulement l'ombre.
+  inside(G, view) {
+    const c = this.ctx, w = this.w, h = this.h, v = G.view, cam = view.camera, kind = INSIDE[v.hide];
+    const s = hideAt(this.map, v.x, v.y);
+    if (!kind || !s) return;
+    const tanV = Math.tan((cam.fov * Math.PI) / 360), tanH = tanV * (w / h), NEAR = 0.02;
+    const yaw = angDiff(v.a, v.door), cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(v.p), sp = Math.sin(v.p);
+    const half = (Math.abs(Math.cos(v.door)) > 0.5 ? s.h : s.w) / 2 - 0.08; // demi-largeur du côté où l'on est
+    // polygone du plan de la porte (u vers la droite, z vers le haut, en mètres autour des yeux) vers
+    // l'écran, coupé juste devant les yeux
+    const poly = pts => {
+      const cs = pts.map(([u, z]) => {
+        const fl = HIDE_IN * cy + u * sy;
+        return [-HIDE_IN * sy + u * cy, -fl * sp + z * cp, fl * cp + z * sp];
+      });
+      const out = [];
+      cs.forEach((a, i) => {
+        const b = cs[(i + 1) % cs.length];
+        if (a[2] >= NEAR) out.push(a);
+        if (a[2] >= NEAR !== b[2] >= NEAR) {
+          const t = (NEAR - a[2]) / (b[2] - a[2]);
+          out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, NEAR]);
+        }
+      });
+      if (out.length < 3) return;
+      out.forEach(([r, up, f], i) => {
+        const x = w / 2 + ((w / 2) * (r / f)) / tanH, y = h / 2 - ((h / 2) * (up / f)) / tanV;
+        if (i) c.lineTo(x, y); else c.moveTo(x, y);
+      });
+      c.closePath();
+    };
+    const rect = (u0, u1, z0, z1) => poly([[u0, z0], [u1, z0], [u1, z1], [u0, z1]]);
+    c.save();
+    if (v.hide !== 'bed') {
+      // l'intérieur du meuble, à peine éclairé par le jour qui passe…
+      const g = c.createLinearGradient(0, 0, 0, h);
+      g.addColorStop(0, '#070403');
+      g.addColorStop(0.5, '#0d0805');
+      g.addColorStop(1, '#060302');
+      c.fillStyle = g;
+      c.fillRect(0, 0, w, h);
+      // …par où l'on voit la pièce (bords flous : la porte est tout contre les yeux)
+      c.globalCompositeOperation = 'destination-out';
+      c.filter = `blur(${Math.max(1, Math.round(h * 0.004))}px)`;
+      c.fillStyle = '#000';
+      c.beginPath();
+      if (kind.gap) rect(-kind.gap / 2, kind.gap / 2, kind.floor, kind.top);
+      for (const [z, dz] of kind.crack || []) {
+        const n = 12;
+        // une fente qui s'amincit vers les deux bouts du cercueil
+        poly([...Array(n + 1).keys()].map(i => [-half + (2 * half * i) / n, z + dz * (1 - ((2 * i) / n - 1) ** 2)])
+          .concat([...Array(n + 1).keys()].reverse().map(i => [-half + (2 * half * i) / n, z])));
+      }
+      c.fill();
+      const L = kind.louvers;
+      if (L) {
+        c.fillStyle = 'rgba(0,0,0,0.8)';
+        c.beginPath();
+        for (let z = L.z0; z < L.z1; z += L.pitch) {
+          rect(-half + 0.06, -kind.gap / 2 - 0.05, z, z + L.slit);
+          rect(kind.gap / 2 + 0.05, half - 0.06, z, z + L.slit);
+        }
+        c.fill();
+      }
+      c.filter = 'none';
+      c.globalCompositeOperation = 'source-over';
+    }
+    // l'ombre du meuble autour de ce qu'on voit
+    const r = Math.hypot(w, h) / 2, vg = c.createRadialGradient(w / 2, h / 2, r * 0.25, w / 2, h / 2, r);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, `rgba(0,0,0,${v.hide === 'bed' ? 0.85 : 0.6})`);
+    c.fillStyle = vg;
+    c.fillRect(0, 0, w, h);
+    c.restore();
+  }
+
   marker(view, x, y, height, color, icon, label, progress = 0) {
     const c = this.ctx, u = this.u, w = this.w, h = this.h, m = 48 * u;
     const s = view.project(x, y, height, w, h);
@@ -151,11 +252,12 @@ export class Hud {
       const p = G.players.get(id);
       if (!p || p === eye.who) continue;
       const d = Math.hypot(p.x - eye.x, p.y - eye.y);
+      if (p.state === 'alive' && p.hidden) continue; // caché·e : on ne le voit pas
       if (p.state === 'alive' || (p.state === 'dead' && ghost)) {
         const s = view.project(p.x, p.y, 2.0, this.w, this.h);
         if (s.behind || d > 20) continue;
         const a = 0.65 * (1 - d / 20);
-        text(c, p.name, s.x, s.y, 12 * u, p.state === 'dead' ? `rgba(190,210,255,${a})` : `rgba(232,220,200,${a})`, 'center');
+        text(c, G.talks?.(id) ? `🔊 ${p.name}` : p.name, s.x, s.y, 12 * u, p.state === 'dead' ? `rgba(190,210,255,${a})` : `rgba(232,220,200,${a})`, 'center');
       } else if (p.state === 'down') {
         const pulse = 0.6 + 0.4 * Math.sin(t * 6);
         const label = `${p.name} · ${p.downT} s · ${this.floorTag(G, p.x) || Math.round(d) + ' m'}`;
@@ -177,7 +279,7 @@ export class Hud {
     const c = this.ctx, u = this.u, w = this.w, h = this.h, t = G.time, me = G.me;
 
     // Viseur et progression de la réanimation
-    if (me?.state === 'alive' && !G.needClick && !G.showPlan) circle(c, w / 2, h / 2, 1.6 * u, 'rgba(240,228,205,0.45)');
+    if (me?.state === 'alive' && !G.hide && !G.needClick && !G.showPlan) circle(c, w / 2, h / 2, 1.6 * u, G.hideTarget ? 'rgba(255,225,170,0.85)' : 'rgba(240,228,205,0.45)');
     if (me?.state === 'down' && me.revive > 0) ring(c, w / 2, h / 2, 40 * u, me.revive, 5 * u, 'rgba(140,255,160,0.9)');
     else if (G.reviveTarget && G.local.act && G.reviveTarget.revive > 0) ring(c, w / 2, h / 2, 30 * u, G.reviveTarget.revive, 4 * u, 'rgba(140,255,160,0.9)');
 
@@ -203,9 +305,11 @@ export class Hud {
       const p = G.players.get(id);
       if (!p) continue;
       circle(c, 18 * u, ty, 6 * u, p.color);
+      if (G.talks?.(id)) ring(c, 18 * u, ty, 9.5 * u, 1, 2 * u, p === me ? this.voiceColor(G, me) : TALK_GREEN); // il parle (et on l'entend)
       const status = p.disc && p.state !== 'escaped' && p.state !== 'dead' ? 'déconnecté·e'
         : p.state === 'down' ? `à terre · ${p.downT} s`
-        : p.state === 'dead' ? 'mort·e' : p.state === 'escaped' ? 'dehors !' : p.room || '';
+        : p.state === 'dead' ? 'mort·e' : p.state === 'escaped' ? 'dehors !'
+        : p.hidden ? `caché·e${p.room ? ' · ' + p.room : ''}` : p.room || '';
       const col = p.state === 'down' ? 'rgba(255,110,100,1)' : p.state === 'dead' ? 'rgba(150,150,160,0.8)' : p.state === 'escaped' ? 'rgba(140,255,160,0.95)' : 'rgba(232,220,200,0.9)';
       const name = p.name + (p === me ? ' (toi)' : '');
       text(c, name, 30 * u, ty, 14 * u, col);
@@ -240,14 +344,20 @@ export class Hud {
     // Indication contextuelle
     let hint = '';
     if (me) {
-      if (me.state === 'alive') {
+      const T = G.hideTarget, into = k => HIDES[k].into;
+      if (me.state === 'alive' && G.hide) {
+        hint = G.shouted?.() ? 'Vous parlez fort : elle va vous entendre !'
+          : `Caché·e ${into(G.hide.kind)} : elle ne vous voit pas… mais elle vous entend · E : sortir`;
+      } else if (me.state === 'alive') {
         if (G.reviveTarget) hint = `Maintenez E pour relever ${G.reviveTarget.name}`;
+        else if (T) hint = T.taken ? `Quelqu’un se cache déjà ${into(T.s.k)}` : `E : se cacher ${into(T.s.k)}`;
+        else if (G.shouted?.()) hint = 'Vous parlez fort : la créature entend votre voix de loin !';
         else if (me.battery <= 0) hint = 'Votre lampe est morte… trouvez des piles !';
         else if (!G.local.light) hint = 'Lampe éteinte : la créature vous voit moins (F pour rallumer)';
         else if (me.battery < 20) hint = 'Les piles faiblissent…';
-        else if (G.time < 14) hint = 'Souris : regarder · ZQSD : se déplacer · Maj : courir · Tab : plan du manoir';
+        else if (G.time < 14) hint = 'Souris : regarder · ZQSD : se déplacer · Maj : courir · Tab : plan du manoir' + (G.pushToTalk ? ' · V : parler' : '');
       } else if (me.state === 'down') hint = `Vous êtes à terre ! Rampez vers vos amis, ils peuvent vous relever (${me.downT} s)`;
-      else if (me.state === 'dead') hint = 'Vous êtes un fantôme. E : laisser un signe aux vivants';
+      else if (me.state === 'dead') hint = 'Vous êtes un fantôme : seuls les morts vous entendent. E : laisser un signe aux vivants';
       else if (me.state === 'escaped') hint = G.spectating ? `Vous avez fui le manoir ! Vous suivez ${G.spectating.name} · clic pour changer` : 'Vous avez fui le manoir !';
     } else hint = 'Partie en cours : vous jouerez à la prochaine manche.';
     if (hint) text(c, hint, w / 2, h - 28 * u, 17 * u, 'rgba(240,228,205,0.92)', 'center');
@@ -306,6 +416,7 @@ export class Hud {
       if (!p || p === v.who || (p.state !== 'alive' && p.state !== 'down') || floorAt(map, p.x) !== f) continue;
       const down = p.state === 'down', [px, py, far] = P(p.x, p.y, (down ? 9 : 5) * u);
       if (down) text(c, '✚', px, py, 16 * u, `rgba(255,70,60,${0.6 + 0.4 * Math.sin(t * 6)})`, 'center');
+      else if (p.hidden) ring(c, px, py, 3.5 * u, 1, 2 * u, p.color); // caché·e : un cercle vide
       else {
         c.globalAlpha = far ? 0.6 : 1;
         circle(c, px, py, 4 * u, p.color);
@@ -365,8 +476,9 @@ export class Hud {
       if (floorAt(map, p.x) !== f) { elsewhere.push(`${p.state === 'down' ? '✚ ' : ''}${p.name} (${map.floors[floorAt(map, p.x)].short})`); continue; }
       const [px, py] = P(p.x, p.y);
       if (p.state === 'down') text(c, '✚', px, py, 18 * u, 'rgba(255,70,60,1)', 'center');
+      else if (p.hidden) ring(c, px, py, 4.5 * u, 1, 2 * u, p.color);
       else circle(c, px, py, 5 * u, p.color);
-      text(c, p.name, px, py - 13 * u, 11 * u, 'rgba(232,220,200,0.9)', 'center');
+      text(c, p.hidden && p.state === 'alive' ? `${p.name} (caché·e)` : p.name, px, py - 13 * u, 11 * u, 'rgba(232,220,200,0.9)', 'center');
     }
     if (elsewhere.length) text(c, `Ailleurs : ${elsewhere.join(' · ')}`, w / 2, y0 + map.h * s + 24 * u, 14 * u, 'rgba(232,220,200,0.8)', 'center');
     const me = G.me;

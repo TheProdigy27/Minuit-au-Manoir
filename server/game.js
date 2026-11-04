@@ -1,6 +1,7 @@
 // Une partie : placement des objets, règles (ramassage, réanimation, sortie) et fin de partie.
-import { CFG, DIFFICULTY, PLAYER_STATES, MONSTER_STATES } from '../shared/config.js';
-import { distanceField } from '../shared/physics.js';
+import { CFG, DIFFICULTY, PLAYER_STATES, MONSTER_STATES, voiceNoise } from '../shared/config.js';
+import { distanceField, solidAt } from '../shared/physics.js';
+import { hideEntry, front } from '../shared/hide.js';
 import { Monster } from './monster.js';
 
 const r2 = v => Math.round(v * 100) / 100;
@@ -81,7 +82,7 @@ export class Game {
       Object.assign(p, {
         x: map.spawn.x + ox, y: map.spawn.y + oy, a: -Math.PI / 2,
         state: 'alive', light: true, running: false, moving: false, act: false,
-        battery: 100, downT: 0, revive: 0, immune: 0, endTime: 0, left: false, discAt: 0, lastPing: -99,
+        battery: 100, downT: 0, revive: 0, immune: 0, endTime: 0, left: false, discAt: 0, lastPing: -99, voice: 0, hide: null, creak: 0,
         stats: { skulls: 0, revives: 0, downs: 0, stuns: 0 },
       });
     });
@@ -89,11 +90,14 @@ export class Game {
 
   input(p, m) {
     if (p.state === 'escaped' || p.state === 'spectator') return;
-    if (Number.isFinite(m.x) && Number.isFinite(m.y)) {
-      p.x = Math.max(0, Math.min(this.map.w, m.x));
-      p.y = Math.max(0, Math.min(this.map.h, m.y));
-    }
     if (Number.isFinite(m.a)) p.a = m.a;
+    // Caché·e : immobile, lampe éteinte (la page envoie encore un instant sa position d'avant)
+    if (p.hide) return;
+    if (Number.isFinite(m.x) && Number.isFinite(m.y)) {
+      const x = Math.max(0, Math.min(this.map.w, m.x)), y = Math.max(0, Math.min(this.map.h, m.y));
+      // jamais dans un meuble ou un mur (sauf un fantôme) : une position d'avant la sortie d'une cachette
+      if (p.state === 'dead' || !solidAt(this.map, Math.floor(x), Math.floor(y), this.exitOpen)) { p.x = x; p.y = y; }
+    }
     p.light = !!m.l;
     p.running = !!m.r;
     p.moving = !!m.m;
@@ -107,12 +111,45 @@ export class Game {
     this.emit('ping', { id: p.id, x: r2(m.x), y: r2(m.y) });
   }
 
-  down(p, monster) {
+  // Une trame du chat vocal de `p` (`db` : son niveau) : la créature l'entend comme un bruit, d'autant plus
+  // loin qu'on parle fort. Les fantômes et ceux qui ont fui ne sont plus dans le manoir.
+  voice(p, db) {
+    if (p.state === 'alive' || p.state === 'down') p.voice = Math.max(p.voice, voiceNoise(db));
+  }
+
+  // Se cacher dans la cachette n° `s` du manoir (s < 0 : en sortir). Refusé si l'on n'est pas debout, trop
+  // loin du meuble, ou que quelqu'un s'y cache déjà. La créature qui vous voit y entrer vient vous en tirer.
+  hide(p, s) {
+    if (!Number.isInteger(s)) return;
+    if (s < 0) { if (p.hide) this.leave(p); return; }
+    const spot = this.map.hides[s];
+    const at = spot && p.state === 'alive' && !p.hide && !this.players.some(q => q.hide?.s === s)
+      && hideEntry(this.map, spot, p.x, p.y, CFG.hide.reach + 0.6); // un peu de marge : la page a bougé depuis
+    if (!at) { if (!p.hide) this.emit('unhide', { id: p.id, no: 1 }); return; }
+    const seenBy = CFG.hide.seen ? this.monsters.filter(m => m.sees(this, p)) : []; // avant que sa lampe ne s'éteigne
+    p.hide = { s, ...at };
+    Object.assign(p, { x: at.x, y: at.y, a: at.a, light: false, running: false, moving: false, act: false, creak: CFG.noise.hide });
+    this.emit('hide', { id: p.id, s, x: r2(at.x), y: r2(at.y), a: r2(at.a), ex: at.ex, ey: at.ey });
+    for (const m of seenBy) m.hunt(this, p, 'seen');
+  }
+
+  // Sortir de sa cachette, devant sa porte (`pulled` : tiré·e dehors par la créature).
+  leave(p, pulled = false) {
+    const h = p.hide;
+    p.hide = null;
+    p.x = h.ex;
+    p.y = h.ey;
+    if (!pulled) p.creak = CFG.noise.hide;
+    this.emit('unhide', { id: p.id, x: h.ex, y: h.ey, ...(pulled && { pulled: 1 }) });
+  }
+
+  // `why` : la créature l'a tiré·e de sa cachette, après l'y avoir vu entrer (seen) ou l'avoir entendu (heard).
+  down(p, monster, why) {
     p.state = 'down';
     p.downT = CFG.rules.bleedOut * this.diff.bleed;
     p.revive = 0;
     p.stats.downs++;
-    this.emit('down', { id: p.id, by: monster.id });
+    this.emit('down', { id: p.id, by: monster.id, ...(why && { why }) });
   }
 
   take(it, p) {
@@ -148,7 +185,21 @@ export class Game {
         p.endTime = this.time;
         this.emit('dead', { id: p.id, left: true });
       }
-      if (p.state !== 'alive') continue;
+      if (p.hide && p.state !== 'alive') p.hide = null; // mort d'avoir quitté la partie
+      // Les bruits d'un joueur caché (`who`) disent à la créature où il est ; elle irait voir devant sa porte (gx, gy).
+      const who = p.hide ? p : null, [gx, gy] = front(p);
+      // Sa voix, debout ou à terre : un bruit qui suit le joueur tant qu'il parle (étouffé par une armoire)
+      if (p.voice > 0) {
+        const V = CFG.noise.voice;
+        if (p.state === 'alive' || p.state === 'down') this.noises.push({ x: p.x, y: p.y, r: p.voice, loud: p.voice >= V.shout, who, gx, gy });
+        p.voice = Math.max(0, p.voice - V.fade * dt);
+      }
+      // La porte de sa cachette qui grince
+      if (p.creak) {
+        this.noises.push({ x: gx, y: gy, r: p.creak, who });
+        p.creak = 0;
+      }
+      if (p.state !== 'alive' || p.hide) continue;
       if (p.light && p.battery > 0) p.battery = Math.max(0, p.battery - CFG.light.drain * this.diff.drain * dt);
       if (p.moving) this.noises.push({ x: p.x, y: p.y, r: p.running ? CFG.noise.run : CFG.noise.walk });
       for (const it of this.items) {
@@ -167,7 +218,7 @@ export class Game {
     // Réanimation : rester près d'un ami à terre en maintenant l'action
     const helped = new Set();
     for (const p of this.players) {
-      if (p.state !== 'alive' || !p.act) continue;
+      if (p.state !== 'alive' || !p.act || p.hide) continue;
       let best = null, bd = R.reviveDist;
       for (const q of this.players) {
         if (q.state !== 'down' || helped.has(q.id)) continue;
@@ -215,7 +266,7 @@ export class Game {
       p: this.players.map(p => [
         p.id, r2(p.x), r2(p.y), r2(p.a),
         PLAYER_STATES.indexOf(p.state),
-        (p.state === 'alive' && p.light && p.battery > 0 ? 1 : 0) | (p.running ? 2 : 0) | (p.moving ? 4 : 0) | (p.connected ? 0 : 8),
+        (p.state === 'alive' && p.light && p.battery > 0 ? 1 : 0) | (p.running ? 2 : 0) | (p.moving ? 4 : 0) | (p.connected ? 0 : 8) | (p.hide ? 16 : 0),
         Math.ceil(p.battery),
         p.state === 'down' ? Math.ceil(p.downT) : 0,
         p.state === 'down' ? r2(p.revive / CFG.rules.reviveTime) : 0,

@@ -18,6 +18,8 @@ const TAU = Math.PI * 2;
 const SLOTS = 12; // bougies et lueurs éclairant réellement la scène (les plus proches)
 const BEAMS = 3; // lampes des autres joueurs qui éclairent la scène
 const EYE = { alive: 1.55, down: 0.4, dead: 1.65 };
+// hauteur des yeux caché·e : debout dans une armoire, allongé·e sous un lit ou dans un cercueil
+const HIDE_EYE = { wardrobe: 1.5, cabinet: 0.95, bed: 0.12, coffin: 0.33 };
 const DIRS4 = [[0, -1], [0, 1], [-1, 0], [1, 0]];
 const LAMP = 38; // intensité de la lampe torche (au centre du faisceau)
 const GLOW = 2.2; // intensité des bougies, lustres, feux et lueurs
@@ -784,15 +786,17 @@ export class Renderer {
         top(0.46);
         break;
       case 'bed':
-        B.box(x0, 0.1, z0 + 0.1, x1, 0.32, z1, M.wood, M.wood);
-        B.box(x0 + 0.02, 0.32, z0 + 0.1, x1 - 0.02, 0.56, z1 - 0.02, P, M.linen);
+        // haut sur pieds (on se cache dessous), un cache-sommier de velours le long des grands côtés
+        B.box(x0, 0.3, z0 + 0.1, x1, 0.42, z1, M.wood, M.wood, { bottom: M.wood });
+        B.box(x0 + 0.02, 0.42, z0 + 0.1, x1 - 0.02, 0.64, z1 - 0.02, P, M.linen);
+        for (const [a, b] of [[x0 - 0.015, x0 + 0.005], [x1 - 0.005, x1 + 0.015]]) B.box(a, 0.19, z0 + 0.12, b, 0.42, z1 - 0.07, M.velvet, M.velvet, { bottom: M.velvet });
         for (let i = 0, n = f.w >= 2 ? 2 : 1; i < n; i++) {
-          B.geo(M.linen, new THREE.SphereGeometry(0.5, 18, 10), mat(x0 + ((i + 0.5) * (x1 - x0)) / n, 0.61, z0 + 0.36, 0.3, 0, 0, ((x1 - x0) / n) * 0.82, 0.14, 0.34));
+          B.geo(M.linen, new THREE.SphereGeometry(0.5, 18, 10), mat(x0 + ((i + 0.5) * (x1 - x0)) / n, 0.69, z0 + 0.36, 0.3, 0, 0, ((x1 - x0) / n) * 0.82, 0.14, 0.34));
         }
         B.box(x0, 0, z0, x1, 1.25, z0 + 0.1, M.wood, M.wood);
-        B.box(x0, 0, z1 - 0.06, x1, 0.75, z1, M.wood, M.wood);
+        B.box(x0, 0, z1 - 0.06, x1, 0.85, z1, M.wood, M.wood);
         for (const [px, pz, ph] of [[x0, z0, 1.9], [x1 - 0.08, z0, 1.9], [x0, z1 - 0.08, 1.5], [x1 - 0.08, z1 - 0.08, 1.5]]) B.box(px, 0, pz, px + 0.08, ph, pz + 0.08, M.wood, M.wood);
-        top(0.56);
+        top(0.64);
         break;
       case 'sofa':
       case 'armchair':
@@ -1794,8 +1798,10 @@ export class Renderer {
     this.updateDust(t, lampOn);
 
     const flash = Math.min(1, G.flash);
+    // caché·e dans le noir, les yeux s'y habituent en quelques secondes : on distingue la pièce dehors
+    this.darkEyes = Math.max(0, Math.min(1, (this.darkEyes || 0) + (eye.hide ? dt / 2.5 : -dt * 2)));
     // 0.33 : un peu plus qu'avant, pour la lueur que les reflets de la pièce donnaient aux matières mates
-    this.ambient.intensity = (ghost ? 2.6 : 0.33) + flash * 2.6;
+    this.ambient.intensity = (ghost ? 2.6 : 0.33 + 1.1 * this.darkEyes) + flash * 2.6;
     this.vm.amb.intensity = 0.35 + flash * 2;
     for (const m of this.S.windows) m.color.setScalar(0.42 + flash * 1.6);
 
@@ -1833,8 +1839,9 @@ export class Renderer {
 
   updateCamera(G, eye, dt) {
     const cam = this.camera, t = G.time;
-    let h = EYE[eye.state] ?? EYE.alive, roll = 0, sway = 0;
-    if (eye.state === 'alive' && eye.moving) {
+    let h = eye.hide ? HIDE_EYE[eye.hide] : EYE[eye.state] ?? EYE.alive, roll = 0, sway = 0;
+    if (eye.hide) h += Math.sin(t * 1.5) * 0.004; // on retient son souffle
+    else if (eye.state === 'alive' && eye.moving) {
       h += Math.abs(Math.sin(eye.bob * 2.6)) * (eye.running ? 0.05 : 0.03);
       sway = Math.sin(eye.bob * 2.6) * (eye.running ? 0.012 : 0.007);
     } else if (eye.state === 'dead') h += Math.sin(t * 1.6) * 0.06;
@@ -1867,7 +1874,7 @@ export class Renderer {
   updateViewmodel(G, eye, owner) {
     const vm = this.vm, cam = this.camera;
     const me = owner === G.me && G.me;
-    const alive = owner?.state === 'alive';
+    const alive = owner?.state === 'alive' && !eye.hide; // caché·e : ni main ni lampe
     const lampOn = alive && (me ? G.local.light && G.me.battery > 0 : owner.light);
     vm.root.visible = alive;
     vm.root.position.copy(cam.position);
@@ -1888,8 +1895,8 @@ export class Renderer {
       lamp.target.position.set(0, 0, -7).applyMatrix4(cam.matrixWorld);
       lamp.target.updateMatrixWorld();
     }
-    this.aura.position.set(cam.position.x, cam.position.y - 0.3, cam.position.z);
-    this.aura.intensity = owner?.state === 'alive' ? 1.2 : owner?.state === 'down' ? 0.8 : 0;
+    this.aura.position.set(cam.position.x, cam.position.y - (eye.hide ? 0 : 0.3), cam.position.z);
+    this.aura.intensity = eye.hide ? 0.15 : owner?.state === 'alive' ? 1.2 : owner?.state === 'down' ? 0.8 : 0;
     return lampOn;
   }
 
@@ -1953,7 +1960,7 @@ export class Renderer {
     const t = G.time, eye = G.view, lit = [];
     for (const p of G.players.values()) {
       const r = this.rig(p);
-      const body = p !== owner && (p.state === 'alive' || p.state === 'down');
+      const body = p !== owner && (p.state === 'alive' || p.state === 'down') && !p.hidden;
       const spirit = p !== owner && p.state === 'dead' && ghost;
       const f = floorAt(this.map, p.x);
       r.root.visible = (body || spirit) && this.shown.has(f);

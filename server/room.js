@@ -2,7 +2,12 @@
 // Tourne chez l'hôte ; chaque joueur est une « socket » fournie par electron/network.js.
 import { CFG, COLORS, DIFFICULTY } from '../shared/config.js';
 import { generateMap } from '../shared/map.js';
+import { levelDist } from '../shared/physics.js';
 import { Game } from './game.js';
+
+// Dans le manoir pour la voix : debout ou à terre (les fantômes, ceux qui ont fui et les spectateurs n'y sont plus).
+const inManor = p => p.inGame && (p.state === 'alive' || p.state === 'down');
+const VOICE_BURST = 50; // trames de voix par seconde et par joueur, au plus (25 en temps normal)
 
 function clientMap(map) {
   const { spots, tiles, roomIdx, ...rest } = map;
@@ -35,6 +40,7 @@ export class Room {
       if (msg.t === 'hello') { player = this.hello(ws, msg); return; }
       if (player && player.ws === ws) this.onMessage(player, msg);
     });
+    ws.on('voice', data => { if (player && player.ws === ws) this.onVoice(player, data); });
     ws.on('close', () => { if (player && player.ws === ws) this.disconnect(player); });
     ws.on('error', () => {});
   }
@@ -97,7 +103,34 @@ export class Room {
       case 'ping':
         if (this.phase === 'playing' && p.inGame) this.game.ping(p, m);
         break;
+      case 'hide':
+        if (this.phase === 'playing' && p.inGame) this.game.hide(p, m.s);
+        break;
     }
+  }
+
+  // Chat vocal de proximité : la voix d'un joueur n'est relayée qu'à ceux qui peuvent l'entendre ; leur
+  // page règle ensuite le volume selon la distance, la direction et les murs. Une trame : son numéro sur
+  // 2 octets, son niveau (dB + 100) sur 1, puis l'Opus. La créature l'entend aussi, selon ce niveau.
+  onVoice(p, data) {
+    const now = Date.now();
+    if (now - (p.voiceT ?? 0) > 1000) { p.voiceT = now; p.voiceN = 0; }
+    if (++p.voiceN > VOICE_BURST) return;
+    if (this.phase === 'playing' && p.inGame && data.length > 3) this.game.voice(p, data[2] - 100);
+    for (const q of this.players) {
+      if (q !== p && q.ws && q.ws.readyState === 1 && this.hears(q, p)) q.ws.sendVoice(p.id, data);
+    }
+  }
+
+  // Au salon, tout le monde s'entend. En partie, ceux qui sont dans le manoir ne s'entendent que de près,
+  // et n'entendent ni les morts ni ceux qui sont dehors. Les fantômes, ceux qui ont fui et les spectateurs
+  // se parlent librement, et entendent les vivants proches : de leur fantôme, ou de l'ami qu'ils suivent
+  // (là, c'est la page qui juge de la distance). Un peu de marge : la page a les positions plus récentes.
+  hears(q, p) {
+    if (this.phase !== 'playing') return true;
+    if (!inManor(p)) return !inManor(q);
+    if (!q.inGame || q.state === 'escaped') return true;
+    return levelDist(this.game.map, q.x, q.y, p.x, p.y) <= CFG.voice.range + 2;
   }
 
   checkStart() {
@@ -151,7 +184,7 @@ export class Room {
       map: this.mapPayload,
       difficulty: g.difficulty,
       time: g.time,
-      players: g.players.map(p => ({ id: p.id, name: p.name, color: p.color, x: p.x, y: p.y, a: p.a })),
+      players: g.players.map(p => ({ id: p.id, name: p.name, color: p.color, x: p.x, y: p.y, a: p.a, hide: p.hide })),
       items: g.items,
       monsters: g.monsters.map(m => ({ x: m.x, y: m.y, a: m.a })),
       skullsFound: g.skullsFound,

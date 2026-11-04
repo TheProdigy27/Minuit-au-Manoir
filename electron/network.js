@@ -19,7 +19,9 @@ const PKT = {
   GAME: 0x47, // « G » message du jeu, en JSON
   BEAT: 0x4b, // « K » toujours là
   BYE: 0x42, // « B » je m'en vais
+  VOICE: 0x56, // « V » voix (Opus) : invité → hôte tel quel, hôte → invité précédé du numéro du joueur qui parle
 };
+const MAX_VOICE = 1000; // octets d'un paquet de voix venu de la page (une trame Opus en fait ~100)
 
 // Durées en millisecondes
 export const TIMING = {
@@ -59,12 +61,14 @@ export function parseCode(text) {
 const entered = change => change === 'Entered' || change === 0;
 
 // Ce que la salle voit d'un joueur : l'essentiel d'un WebSocket. `identity` sert de jeton de
-// reconnexion (le SteamID, garanti par Steam) ; `transmit` achemine les messages jusqu'à lui.
+// reconnexion (le SteamID, garanti par Steam) ; `transmit` achemine les messages jusqu'à lui, et
+// `transmitVoice(from, data)` la voix d'un autre joueur (numéro `from` dans la salle).
 export class PlayerSocket extends EventEmitter {
-  constructor(identity, transmit, host = false) {
+  constructor(identity, transmit, host = false, transmitVoice = null) {
     super();
     this.identity = identity;
     this.transmit = transmit;
+    this.transmitVoice = transmitVoice;
     this.host = host;
     this.readyState = 1;
   }
@@ -77,6 +81,15 @@ export class PlayerSocket extends EventEmitter {
     if (this.readyState === 1) this.emit('message', data);
   }
 
+  sendVoice(from, data) {
+    if (this.readyState === 1) this.transmitVoice?.(from, data);
+  }
+
+  // Événement 'voice' : un paquet de voix de ce joueur, que la salle relaie à ceux qui l'entendent.
+  receiveVoice(data) {
+    if (this.readyState === 1 && data.length > 0 && data.length <= MAX_VOICE) this.emit('voice', data);
+  }
+
   // Comme pour un WebSocket, « close » arrive après coup : la salle peut remplacer la connexion
   // d'un joueur qui revient sans le croire parti entre-temps.
   close() {
@@ -86,7 +99,8 @@ export class PlayerSocket extends EventEmitter {
   }
 }
 
-// Émet 'message' (JSON destiné à la page), 'status' ({ state, reason }) et 'join-request' (code).
+// Émet 'message' (JSON destiné à la page), 'voice' (numéro du joueur qui parle, paquet de voix),
+// 'status' ({ state, reason }) et 'join-request' (code).
 export class Network extends EventEmitter {
   constructor({ steam, SteamCallback, version, createRoom, timing = {} }) {
     super();
@@ -173,13 +187,18 @@ export class Network extends EventEmitter {
 
   send(data, unreliable = false) { this.session?.send(data, unreliable); }
 
+  // La voix du joueur de ce PC (trame Opus numérotée, préparée par la page).
+  sendVoice(data) {
+    if (data.length > 0 && data.length <= MAX_VOICE) this.session?.sendVoice(data);
+  }
+
   invite() {
     if (this.session) this.steam.overlay.activateInviteDialog(this.session.lobby.id);
   }
 
   // Joueur supplémentaire sur ce PC (fenêtre de test), branché directement sur la partie hébergée.
-  addLocalPlayer(identity, deliver) {
-    return this.hosting ? this.session.addLocal(new PlayerSocket(identity, deliver)) : null;
+  addLocalPlayer(identity, deliver, deliverVoice = null) {
+    return this.hosting ? this.session.addLocal(new PlayerSocket(identity, deliver, false, deliverVoice)) : null;
   }
 
   packet(to, type, text = '', unreliable = false) {
@@ -188,6 +207,17 @@ export class Network extends EventEmitter {
     buf.write(text, 1);
     const mode = unreliable && buf.length <= MAX_UNRELIABLE ? SEND_UNRELIABLE : SEND_RELIABLE;
     return this.steam.networking.sendP2PPacket(to, mode, buf);
+  }
+
+  // Voix : toujours en non fiable (une trame perdue est remplacée par un court silence). Vers un
+  // invité, `from` donne le numéro du joueur qui parle (sur 16 bits).
+  voicePacket(to, data, from = -1) {
+    const head = from < 0 ? 1 : 3;
+    const buf = Buffer.alloc(head + data.length);
+    buf[0] = PKT.VOICE;
+    if (from >= 0) buf.writeUInt16LE(from & 0xffff, 1);
+    buf.set(data, head);
+    if (buf.length <= MAX_UNRELIABLE) this.steam.networking.sendP2PPacket(to, SEND_UNRELIABLE, buf);
   }
 
   poll() {
@@ -218,7 +248,7 @@ class HostSession {
     this.locals = new Set();
     this.tag = Math.random().toString(36).slice(2, 8);
     this.count = 0;
-    this.local = this.addLocal(new PlayerSocket(String(net.me), data => net.emit('message', data), true));
+    this.local = this.addLocal(new PlayerSocket(String(net.me), data => net.emit('message', data), true, (from, data) => net.emit('voice', from, data)));
   }
 
   addLocal(sock) {
@@ -256,12 +286,14 @@ class HostSession {
     }
     peer.heard = Date.now();
     if (type === PKT.GAME) peer.receive(buf.toString('utf8', 1));
+    else if (type === PKT.VOICE) peer.receiveVoice(buf.subarray(1));
     else if (type === PKT.BYE) this.drop(from);
   }
 
   // Toute nouvelle session est annoncée à l'invité : il se présente alors (à nouveau) à la salle.
   addPeer(id) {
-    const peer = new PlayerSocket(String(id), (data, droppable) => this.net.packet(id, PKT.GAME, data, droppable));
+    const peer = new PlayerSocket(String(id), (data, droppable) => this.net.packet(id, PKT.GAME, data, droppable), false,
+      (from, data) => this.net.voicePacket(id, data, from));
     peer.session = `${this.tag}${++this.count}`;
     peer.heard = Date.now();
     this.peers.set(id, peer);
@@ -285,6 +317,8 @@ class HostSession {
   }
 
   send(data) { this.local.receive(data); }
+
+  sendVoice(data) { this.local.receiveVoice(data); }
 
   close() {
     for (const id of this.peers.keys()) this.net.packet(id, PKT.BYE);
@@ -332,6 +366,8 @@ class GuestSession {
       }
     } else if (type === PKT.GAME) {
       if (this.session) this.net.emit('message', buf.toString('utf8', 1));
+    } else if (type === PKT.VOICE) {
+      if (this.session && buf.length > 3) this.net.emit('voice', buf.readUInt16LE(1), buf.subarray(3));
     } else if (type === PKT.BYE) {
       this.net.end('host-left');
     }
@@ -355,6 +391,10 @@ class GuestSession {
 
   send(data, unreliable) {
     if (this.session) this.net.packet(this.host, PKT.GAME, data, unreliable);
+  }
+
+  sendVoice(data) {
+    if (this.session) this.net.voicePacket(this.host, data);
   }
 
   close() {

@@ -2,8 +2,9 @@
 // meublées selon leur thème, et des escaliers d'un étage à l'autre. Les étages sont posés côte à côte
 // sur une seule grille, séparés par du vide (voir physics.js). Le serveur génère, les navigateurs
 // reçoivent le résultat.
-import { TILE } from './config.js';
+import { TILE, CFG } from './config.js';
 import { floorAt } from './physics.js';
+import { HIDES, hideOpen } from './hide.js';
 
 export function mulberry32(seed) {
   let a = seed >>> 0;
@@ -445,6 +446,44 @@ export function generateMap(seed, nPlayers = 4) {
 
   for (const room of rooms) for (const id of room.cells) furnish(cells[id], room.theme);
 
+  // --- Cachettes : armoires et lits des chambres, buffets, cercueils de la crypte. Il en faut dans au
+  // moins une cellule sur CFG.hide.spread de chaque étage : ailleurs, une vieille armoire (un buffet en
+  // cuisine) adossée à un mur, la porte dégagée.
+  const cellOfTile = (x, y) => cells.find(c => x >= c.x && x < c.x + CW && y >= c.y && y < c.y + CH);
+  function hideaway(cell) {
+    const theme = rooms[cell.room].theme, k = theme === 'kitchen' || theme === 'dining' ? 'cabinet' : 'wardrobe';
+    const opts = [];
+    for (let y = cell.y; y < cell.y + CH; y++) {
+      for (let x = cell.x; x < cell.x + CW; x++) {
+        // [largeur, profondeur, direction du mur dans le dos]
+        for (const o of [[2, 1, 0, -1], [2, 1, 0, 1], [1, 2, -1, 0], [1, 2, 1, 0]]) opts.push([x, y, ...o]);
+      }
+    }
+    for (const [x, y, fw, fh, bx, by] of shuffle(opts)) {
+      const back = [], front = [];
+      if (by) for (let i = x; i < x + fw; i++) { back.push([i, by < 0 ? y - 1 : y + 1]); front.push([i, by < 0 ? y + 1 : y - 1]); }
+      else for (let j = y; j < y + fh; j++) { back.push([bx < 0 ? x - 1 : x + 1, j]); front.push([bx < 0 ? x + 1 : x - 1, j]); }
+      if (!back.every(([i, j]) => get(i, j) === TILE.WALL)) continue;
+      if (!front.every(([i, j]) => get(i, j) === TILE.FLOOR && !reserved[I(i, j)])) continue;
+      if (!place(k, x, y, fw, fh, true)) continue;
+      for (const [i, j] of front) reserved[I(i, j)] = 1;
+      return true;
+    }
+    return false;
+  }
+  for (let f = 0; f < nf; f++) {
+    const mine = cells.filter(c => c.f === f), has = new Set();
+    for (const it of furniture) {
+      const c = it.k in HIDES && cellOfTile(it.x, it.y);
+      if (c && c.f === f) has.add(c.id);
+    }
+    const want = Math.ceil(mine.length / CFG.hide.spread);
+    for (const cell of shuffle(mine.filter(c => c !== foyer && !has.has(c.id)))) {
+      if (has.size >= want) break;
+      if (hideaway(cell)) has.add(cell.id);
+    }
+  }
+
   // Décor commun : toiles d'araignée, sang, griffures, citrouilles
   for (const cell of cells) {
     const X = cell.x, Y = cell.y;
@@ -494,8 +533,13 @@ export function generateMap(seed, nPlayers = 4) {
     return list;
   });
 
+  // Les cachettes, une fois tout posé : seulement celles dont un côté au moins reste dégagé
+  const hides = furniture
+    .filter(it => it.k in HIDES && hideOpen({ w, h, tiles }, it))
+    .map((it, id) => ({ id, k: it.k, x: it.x, y: it.y, w: it.w, h: it.h }));
+
   return {
-    seed, w, h, tiles, fw, stride, floors, ground, stairs,
+    seed, w, h, tiles, fw, stride, floors, ground, stairs, hides,
     grid: { cols, rows, cw: CW, ch: CH },
     rooms: rooms.map(r => ({ id: r.id, f: r.f, theme: r.theme, name: r.name })),
     cells: cells.map(c => ({ id: c.id, f: c.f, c: c.c, r: c.r, x: c.x, y: c.y, room: c.room })),

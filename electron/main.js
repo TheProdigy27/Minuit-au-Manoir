@@ -119,6 +119,13 @@ function launch() {
     if (test) test.socket?.receive(data);
     else if (isMain(e)) network?.send(data, unreliable);
   });
+  // Voix du joueur (trame Opus numérotée) : vers l'hôte, ou vers la salle pour une fenêtre de test.
+  ipcMain.on('voice:send', (e, data) => {
+    if (!(data instanceof Uint8Array)) return;
+    const test = tests.get(e.sender.id);
+    if (test) test.socket?.receiveVoice(Buffer.from(data));
+    else if (isMain(e)) network?.sendVoice(Buffer.from(data));
+  });
   ipcMain.on('net:invite', e => { if (isMain(e)) network?.invite(); });
   ipcMain.handle('display:get', () => display);
   ipcMain.on('display:set', (e, mode) => { if (isMain(e)) setDisplay(mode); });
@@ -151,6 +158,7 @@ function startSteam() {
   steamError = '';
   network = new Network({ steam, SteamCallback: steamworks.SteamCallback, version: app.getVersion(), createRoom: () => new Room() });
   network.on('message', data => toMain('net:message', data));
+  network.on('voice', (from, data) => toMain('voice:message', from, new Uint8Array(data))); // copie : rien d'autre du tampon de Steam
   network.on('status', s => {
     if (s.state === 'closed') closeTests();
     toMain('net:status', s);
@@ -190,8 +198,8 @@ function setDisplay(mode) {
   fs.writeFile(settingsFile(), JSON.stringify({ display })).catch(() => {});
 }
 
-function toMain(channel, value) {
-  if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send(channel, value);
+function toMain(channel, ...values) {
+  if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send(channel, ...values);
 }
 
 // Les fichiers du jeu, servis sous app://jeu/ comme l'était le site : public/, /shared/ et three.js (/vendor/).
@@ -288,7 +296,8 @@ function openTest() {
   win.once('ready-to-show', () => win.show());
   win.webContents.on('did-finish-load', () => {
     entry.socket?.close();
-    entry.socket = network?.addLocalPlayer(`test-${n}`, data => { if (!win.isDestroyed()) win.webContents.send('net:message', data); });
+    entry.socket = network?.addLocalPlayer(`test-${n}`, data => { if (!win.isDestroyed()) win.webContents.send('net:message', data); },
+      (from, data) => { if (!win.isDestroyed()) win.webContents.send('voice:message', from, new Uint8Array(data)); });
     if (entry.socket) win.webContents.send('net:status', { state: 'connected' });
   });
   win.on('closed', () => {

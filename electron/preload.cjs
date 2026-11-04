@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('mam', {
   join: code => ipcRenderer.invoke('net:join', String(code)),
   leave: () => ipcRenderer.send('net:leave'),
   send: (data, unreliable) => ipcRenderer.send('net:send', String(data), !!unreliable),
+  voice: data => { if (data instanceof Uint8Array) ipcRenderer.send('voice:send', data); },
+  onVoice: fn => ipcRenderer.on('voice:message', (_e, from, data) => fn(from, data)),
   invite: () => ipcRenderer.send('net:invite'),
   display: () => ipcRenderer.invoke('display:get'),
   setDisplay: mode => ipcRenderer.send('display:set', String(mode)),

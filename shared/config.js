@@ -26,7 +26,25 @@ export const CFG = {
     memory: 1.2, // continue de vous suivre un instant après vous avoir perdu de vue
     boredom: 40, // sans piste, finit par « flairer » un joueur
   },
-  noise: { run: 8, walk: 2, skull: 18, battery: 5, revive: 3 },
+  noise: {
+    run: 8, walk: 2, skull: 18, battery: 5, revive: 3,
+    hide: 2.5, // la porte d'une cachette qui grince, en y entrant ou en sortant
+    // La créature entend aussi le chat vocal. Le niveau de chaque trame (voice.js) compare la voix à la
+    // façon habituelle de parler du joueur : une voix normale (pics vers `db` dB) porte à `r` cases, deux
+    // fois plus loin tous les 6 dB de plus, au plus à `max`. Dès `shout` cases, un cri traverse les murs
+    // sans s'affaiblir et s'entend à l'étage voisin. Moins de `min` : un murmure, elle ne l'entend pas.
+    // Le bruit retombe de `fade` cases par seconde entre deux syllabes.
+    voice: { db: -18, r: 5, min: 1.2, max: 16, shout: 12, fade: 20 },
+  },
+  // Chat vocal de proximité : au-delà de `range` cases (un étage d'écart en compte 8 de plus), on
+  // n'entend plus quelqu'un ; jusqu'à `near`, on l'entend à plein volume.
+  voice: { range: 20, near: 1.5 },
+  // Cachettes (armoires, buffets, dessous des lits, cercueils) : on s'y glisse à moins de `reach` cases
+  // du meuble. Caché·e, la créature ne vous voit pas et ne peut pas vous attraper… sauf si elle vous a vu
+  // y entrer (`seen`), ou si elle vous entend (votre voix, la porte qui grince) à moins de `hear` cases :
+  // elle vient alors vous en tirer (`seen: false, hear: 0` : on y est toujours à l'abri). Au moins une
+  // cellule sur `spread` de chaque étage en a une.
+  hide: { reach: 1.1, hear: 2.5, seen: true, spread: 2 },
   rules: { bleedOut: 50, reviveTime: 3, reviveDist: 1.3, pickupDist: 0.75, pingCooldown: 3, disconnectGrace: 45, reviveImmunity: 2 },
 };
 
@@ -43,3 +61,9 @@ export const MONSTER_STATES = ['dormant', 'wander', 'investigate', 'search', 'ch
 
 // Portée de la lampe selon la batterie : elle faiblit sous 25 %.
 export const batteryFactor = b => (b >= 25 ? 1 : 0.45 + 0.55 * (b / 25));
+
+// Distance (en cases) à laquelle la créature entend une trame de voix de niveau `db` (0 : pas du tout).
+export function voiceNoise(db) {
+  const V = CFG.noise.voice, r = V.r * 2 ** ((db - V.db) / 6);
+  return r < V.min ? 0 : Math.min(V.max, r);
+}

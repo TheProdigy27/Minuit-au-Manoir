@@ -59,17 +59,33 @@ Pendant la partie, Steam affiche « En jeu : Spacewar » pour tous les joueurs :
 - 🪜 Les étages sont reliés par des **escaliers** (deux entre chaque étage et le suivant).
 - 🚪 Quand ils sont tous trouvés, la **grande porte du hall** s'ouvre : sortez !
 - 👁 La créature dort pendant 15 secondes, puis elle chasse (à partir de 3 joueurs, elles sont
-  deux). Elle **voit les lampes allumées de loin** et **entend ceux qui courent**, et elle prend
-  les escaliers aussi. Ramasser un crâne fait du bruit, qui s'entend jusqu'à l'étage voisin, et
+  deux). Elle **voit les lampes allumées de loin**, **entend ceux qui courent** et **ceux qui
+  parlent** (voir le chat vocal), et elle prend les escaliers aussi. Ramasser un crâne fait du bruit, qui s'entend jusqu'à l'étage voisin, et
   chaque crâne trouvé la rend plus rapide.
 - 🔦 Braquez votre lampe sur elle (≈1,5 s) pour la **faire fuir**. À plusieurs, c'est plus
   rapide. Ensuite, elle ne craint plus la lumière pendant quelques secondes.
 - 🌑 **Éteignez votre lampe pour vous cacher** : dans le noir, elle ne vous repère que de près.
   Les piles s'usent, ramassez-en.
+- 🚪 **Cachettes** : armoires, buffets, dessous des lits, cercueils de la crypte (il y en a dans au
+  moins une pièce sur deux, à chaque étage). Face au meuble, **E** pour s'y glisser (la lampe
+  s'éteint), **E** pour en sortir. Cachée, la créature ne vous voit pas et **ne peut pas vous
+  attraper**… sauf si elle vous a vu·e y entrer, ou si elle vous **entend de tout près** (votre voix,
+  la porte qui grince) : elle vient alors vous en tirer. De plus loin, elle vient seulement voir devant
+  la porte : retenez votre souffle, elle finira par repartir. Une personne par cachette ; un ami peut
+  vous sauver en braquant sa lampe sur elle avant qu'elle n'ouvre la porte.
 - ✚ Attrapé·e, on tombe **à terre**. Un ami reste à côté et maintient l'action 3 secondes pour
   vous relever. Sans aide, vous mourez au bout de 50 secondes.
 - 👻 Les morts deviennent des **fantômes** : ils traversent les murs, voient la créature à travers
   eux, et laissent des **signes** lumineux pour guider les vivants.
+- 🎙 Le **chat vocal de proximité** est intégré : on n'entend que les joueurs proches, de plus en
+  plus faiblement jusqu'à une vingtaine de pas, et sur le côté d'où vient leur voix. Les murs
+  l'étouffent, l'étage voisin encore plus. Les fantômes, eux, ne parlent qu'aux autres fantômes (et à
+  ceux qui ont fui) : pour aider les vivants, il leur reste les signes. Au salon et à la fin de la
+  partie, tout le monde s'entend.
+- 🤫 **La créature entend aussi les voix.** Une voix normale porte à quelques pas (moins loin qu'une
+  course), deux fois plus loin à chaque fois qu'on hausse le ton, et **un cri s'entend à travers les
+  murs, jusqu'à l'étage voisin**. Un murmure, elle ne l'entend pas. Même à terre, appeler à l'aide
+  peut la faire revenir.
 - 🗺 Perdu·e ? Maintenez **Tab** pour consulter le plan de l'étage où vous êtes : il montre les
   pièces, les escaliers et l'étage où ils mènent, et vos amis (ceux des autres étages sont nommés
   dessous), mais ni les crânes ni la créature. En permanence, une **mini-carte** en bas à droite
@@ -87,9 +103,11 @@ La partie se termine quand plus personne n'est debout dans le manoir.
 | Courir | Maj |
 | Allumer / éteindre la lampe | F ou clic droit |
 | Relever un ami / signe de fantôme | E ou Espace (maintenir) |
+| Se cacher (face à une armoire, un lit…) / sortir de sa cachette | E ou Espace |
 | Plan du manoir | Tab (maintenir) |
+| Parler, en mode « Appuyer sur V » | V (maintenir) |
 | Suivre un autre joueur (après la fuite) | clic |
-| Menu : options (son, souris, affichage, mises à jour), quitter la partie ou le jeu | Échap |
+| Menu : options (son, chat vocal, souris, affichage, mises à jour), quitter la partie ou le jeu | Échap |
 | Passer du plein écran à la fenêtre, et inversement | F11 |
 | Overlay Steam | Maj+Tab |
 
@@ -100,11 +118,25 @@ Le jeu s'ouvre en plein écran. Les options proposent aussi le **plein écran fe
 affiché quand on passe à une autre application (pratique avec deux écrans), et le mode **fenêtré**.
 Le choix est gardé pour les prochaines fois.
 
+Le chat vocal se règle dans les options : **activation vocale** (par défaut : le micro s'ouvre quand
+on parle, au-dessus d'un seuil que l'on règle en regardant la barre de niveau), **appuyer sur V**, ou
+**micro coupé** (on entend toujours les autres). On y choisit aussi le micro et le volume des voix.
+Un anneau vert autour de la pastille d'un joueur (en haut à gauche, ou dans le salon) montre qu'il
+parle, et qu'on l'entend. Autour de la vôtre, en partie, il vire à l'**orange** quand la créature vous
+entend d'aussi loin que si vous couriez, et au **rouge** quand vous criez (un avertissement s'affiche
+alors en bas de l'écran).
+
+Ce qui compte, c'est votre voix comparée à votre façon habituelle de parler, apprise en quelques
+minutes de conversation (au salon, par exemple) et gardée pour ce micro d'une fois sur l'autre : un
+micro sensible ne vous rend pas plus bruyant·e qu'un autre. Pour jouer en restant dans un appel
+Discord, choisissez « micro coupé » : sinon, la créature entend aussi ce que vous dites dans l'appel.
+
 ## Conseils pour la soirée
 
 - Éteignez la lumière et montez le son : toute l'ambiance est sonore (battements de cœur,
   grondements, chuchotements, orage). Avec des écouteurs, c'est encore plus angoissant.
-- Le jeu n'a pas de chat vocal : lancez un appel à côté (Discord ou autre).
+- Coupez un éventuel appel Discord pendant la partie : le chat vocal du jeu ne porte qu'à quelques
+  pas, c'est tout l'intérêt. Avec un casque, on entend mieux d'où viennent les voix.
 - Celui qui arrive après le début regarde la partie en spectateur et joue à la manche suivante.
 - Si quelqu'un perd la connexion ou ferme le jeu, il a 45 secondes pour revenir avec le même code
   et reprendre sa place.
@@ -128,6 +160,11 @@ Le choix est gardé pour les prochaines fois.
   ` --sans-overlay` à la fin de sa cible. L'overlay Steam est alors désactivé, et les invitations
   s'ouvrent dans la fenêtre de Steam.
 - **Pas de son** : cliquez dans la fenêtre du jeu.
+- **Les autres ne m'entendent pas** : Échap, Options. La barre sous « Seuil de l'activation vocale »
+  doit dépasser le trait rouge quand vous parlez (sinon, baissez le seuil ou choisissez un autre
+  micro). Si un message dit que Windows bloque le micro : Paramètres Windows › Confidentialité et
+  sécurité › Microphone, autorisez les applications de bureau à y accéder.
+- **On m'entend en écho** : quelqu'un joue sur haut-parleurs ; un casque règle le problème.
 - **La vue tourne trop vite ou trop lentement** : Échap, puis réglez « Sensibilité de la souris ».
 - **Le jeu saccade** : quand l'ordinateur peine, il coupe tout seul le lissage des bords, puis baisse
   sa résolution. Fermez les autres programmes, et branchez le portable sur secteur.
@@ -165,6 +202,15 @@ partie ; le code affiché, c'est l'identifiant de ce salon. Les invités y entre
 l'hôte en P2P. Steam traverse les box ou relaie les paquets. L'état du jeu (30 fois par seconde) et
 les déplacements partent en envoi non fiable, le reste en envoi fiable.
 
+La voix : la page encode le micro en Opus (WebCodecs, trames de 40 ms à 20 kbit/s) et l'envoie à
+l'hôte en non fiable ; l'hôte ne la relaie qu'à ceux qui peuvent l'entendre (même étage ou voisin, à
+portée, et pas des morts vers les vivants : `hears` dans [server/room.js](server/room.js)). Chaque
+page règle ensuite le volume, l'étouffement par les murs et la direction (HRTF) à chaque image.
+Chaque trame porte aussi son niveau : l'hôte en fait un bruit pour la créature (`voice` dans
+[server/game.js](server/game.js), portée `voiceNoise` dans [shared/config.js](shared/config.js)). Ce
+niveau se mesure sur un second flux du micro, brut, comparé à la voix habituelle du joueur : le réglage
+automatique du gain de Chrome, qui rehausse peu à peu une voix basse, fausserait le son envoyé.
+
 ```
 electron/main.js      application : fenêtre, Steam, pont entre la page et le réseau
 electron/network.js   salon Steam, code de partie, échanges P2P entre l'hôte et les invités
@@ -182,5 +228,6 @@ public/js/art.js      motifs dessinés par le code (murs, meubles, tapis…) et 
 public/textures/      photos des matières (Poly Haven, domaine public)
 public/js/hud.js      interface par-dessus la vue : crânes, équipe, repères, mini-carte, plan, apparitions
 public/js/main.js     écrans, réseau, déplacement du joueur, boucle de jeu (+ input.js, audio.js)
+public/js/voice.js    chat vocal : micro (voice-worklet.js), encodage Opus, voix des autres placées dans le manoir
 test/                 tests du réseau (faux Steam), de la mise à jour (faux GitHub) et du manoir à étages
 ```

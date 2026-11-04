@@ -4,6 +4,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Network, PlayerSocket, lobbyCode, parseCode } from '../electron/network.js';
 import { Room } from '../server/room.js';
+import { generateMap } from '../shared/map.js';
+import { CFG, TILE, voiceNoise } from '../shared/config.js';
+import { lineOfSight } from '../shared/physics.js';
+import { Game } from '../server/game.js';
 
 const SteamCallback = { LobbyChatUpdate: 5, P2PSessionRequest: 6, GameLobbyJoinRequested: 8 };
 const FAST = { poll: 2, beat: 25, connect: 500, lost: 150, giveUp: 900, peer: 250 };
@@ -310,4 +314,155 @@ test('invitation Steam acceptée : le code du salon est transmis à la page', ()
   bob.user.fire(SteamCallback.GameLobbyJoinRequested, { lobby_steam_id: lobby, friend_steam_id: 1n });
   assert.equal(code, lobbyCode(lobby));
   bob.net.dispose();
+});
+
+// La page reçoit la voix des autres : numéro du joueur qui parle, puis la trame telle qu'envoyée.
+function listen(p) {
+  p.voices = [];
+  p.net.on('voice', (from, data) => p.voices.push([from, [...data]]));
+}
+
+test("la voix passe par l'hôte, en non fiable, vers tous les autres au salon", async () => {
+  const hub = new FakeSteam();
+  const { alice, bob, room } = await hostAndJoin(hub);
+  const carol = player(hub, 'Carol');
+  [alice, bob, carol].forEach(listen);
+  try {
+    await carol.net.join(lobbyCode(alice.net.session.lobby.id));
+    await until(() => alice.last('lobby')?.players.length === 3 && carol.last('welcome'), 'Carol arrive');
+    const id = name => room.players.find(p => p.name === name).id;
+    bob.net.sendVoice(Buffer.from([1, 0, 9, 8, 7]));
+    await until(() => alice.voices.length && carol.voices.length, 'Alice et Carol entendent Bob');
+    assert.deepEqual(alice.voices[0], [id('Bob'), [1, 0, 9, 8, 7]]);
+    assert.deepEqual(carol.voices[0], [id('Bob'), [1, 0, 9, 8, 7]]);
+    alice.net.sendVoice(Buffer.from([2, 0, 6]));
+    await until(() => bob.voices.length && carol.voices.length === 2, "Bob et Carol entendent l'hôte");
+    assert.deepEqual(bob.voices[0], [id('Alice'), [2, 0, 6]]);
+    await wait(30);
+    assert.equal(bob.voices.length, 1, 'on ne s’entend pas soi-même');
+    assert.equal(alice.voices.length, 1);
+    const voice = hub.sent.filter(s => s.type === 'V');
+    assert.equal(voice.length, 4);
+    assert.ok(voice.every(s => s.mode === 0), 'voix en non fiable');
+
+    // Garde-fou : un joueur qui inonde la salle n'est relayé que jusqu'à 50 trames par seconde
+    for (let i = 0; i < 80; i++) bob.net.sendVoice(Buffer.from([i, 0, 1]));
+    await until(() => carol.voices.length >= 51, 'les trames de Bob arrivent');
+    await wait(50);
+    assert.equal(carol.voices.length, 51);
+  } finally {
+    for (const p of [alice, bob, carol]) p.net.dispose();
+  }
+});
+
+test("en partie, un mort n'est entendu que des morts", async () => {
+  const hub = new FakeSteam();
+  const { alice, bob, room } = await hostAndJoin(hub);
+  [alice, bob].forEach(listen);
+  try {
+    await startGame(alice, bob, room);
+    const [a, b] = ['Alice', 'Bob'].map(n => room.game.players.find(p => p.name === n));
+    b.state = 'dead';
+    bob.net.sendVoice(Buffer.from([1, 0, 5]));
+    alice.net.sendVoice(Buffer.from([1, 0, 4]));
+    await until(() => bob.voices.length, 'le fantôme de Bob entend Alice, juste à côté');
+    await wait(50);
+    assert.equal(alice.voices.length, 0, 'Alice, vivante, n’entend pas le fantôme');
+    assert.deepEqual(bob.voices[0], [a.id, [1, 0, 4]]);
+  } finally {
+    alice.net.dispose();
+    bob.net.dispose();
+  }
+});
+
+test('qui entend qui : de près dans le manoir, partout entre morts et dehors', () => {
+  const room = new Room();
+  room.dispose();
+  const map = generateMap(7, 3);
+  const R = CFG.voice.range;
+  const at = (x, y, state = 'alive', inGame = true) => ({ x, y, state, inGame });
+  const p = at(2, 2);
+  assert.equal(room.hears(at(2, 2 + R * 3), p), true, 'au salon, tout le monde s’entend');
+  room.phase = 'playing';
+  room.game = { map };
+  assert.equal(room.hears(at(2, 2 + R - 1), p), true, 'à portée de voix');
+  assert.equal(room.hears(at(2, 2 + R + 5), p), false, 'trop loin');
+  assert.equal(room.hears(at(2 + map.stride, 2 + R - 10), p), true, 'juste au-dessus, à travers le plancher');
+  assert.equal(room.hears(at(2 + map.stride, 2 + R - 4), p), false, 'loin, à un autre étage');
+  assert.equal(room.hears(at(2, 2 + R - 1), at(2, 2, 'down')), true, 'à terre, on appelle encore à l’aide');
+  assert.equal(room.hears(at(2, 2 + R - 1, 'dead'), p), true, 'un fantôme proche entend les vivants');
+  assert.equal(room.hears(at(2, 2 + R + 5, 'dead'), p), false, '…mais pas de loin');
+  assert.equal(room.hears(at(2, 2 + R * 3, 'escaped'), p), true, 'dehors, on entend par les oreilles de l’ami suivi');
+  assert.equal(room.hears(at(0, 0, undefined, false), p), true, 'le spectateur aussi');
+  const ghost = at(2, 2, 'dead');
+  assert.equal(room.hears(at(2, 2.5), ghost), false, 'les vivants n’entendent pas les morts');
+  assert.equal(room.hears(at(2, 2 + R * 3, 'dead'), ghost), true, 'les morts s’entendent partout');
+  assert.equal(room.hears(at(0, 0, 'escaped'), ghost), true);
+  assert.equal(room.hears(at(2, 2.5), at(2, 2, 'escaped')), false, 'ceux qui ont fui ne sont plus dans le manoir');
+  assert.equal(room.hears(at(2, 2.5, 'dead'), at(0, 0, undefined, false)), true, 'spectateurs et fantômes se parlent');
+});
+
+test('la créature entend la voix : deux fois plus loin tous les 6 dB, rien pour un murmure', () => {
+  const V = CFG.noise.voice;
+  assert.equal(voiceNoise(V.db), V.r, 'voix normale');
+  assert.ok(Math.abs(voiceNoise(V.db + 6) - 2 * V.r) < 1e-9);
+  assert.ok(Math.abs(voiceNoise(V.db - 6) - V.r / 2) < 1e-9);
+  assert.equal(voiceNoise(-45), 0, 'murmure');
+  assert.equal(voiceNoise(0), V.max, 'un cri ne porte pas à l’infini');
+  assert.ok(voiceNoise(-6) >= V.shout, 'un cri traverse les murs');
+  assert.ok(voiceNoise(V.db) < CFG.noise.run, 'parler normalement s’entend moins que courir');
+});
+
+test('parler attire la créature, crier plus encore ; ni les murmures ni les fantômes', () => {
+  const room = new Room();
+  room.dispose();
+  const map = generateMap(7, 2);
+  const players = ['Alice', 'Bob'].map((name, i) => ({ id: i + 1, name, connected: true, inGame: true, ws: null }));
+  const game = new Game(map, players, 'normal', () => {});
+  Object.assign(room, { players, game, phase: 'playing' });
+  const [a, b] = players;
+  b.state = 'dead';
+  a.light = false; // dans le noir, elle ne la voit pas à 4 cases : elle ne peut que l'entendre
+  const m = game.monsters[0];
+  // La créature réveillée, à 4 cases d'Alice, en vue (rien entre elles)
+  let spot = null;
+  for (let y = 1; y < map.h - 1 && !spot; y++) for (let x = 1; x < map.fw - 1; x++) {
+    const d = Math.hypot(x + 0.5 - a.x, y + 0.5 - a.y);
+    if (map.tiles[y * map.w + x] === TILE.FLOOR && d > 3.8 && d < 4.4 && lineOfSight(map, x + 0.5, y + 0.5, a.x, a.y)) { spot = [x + 0.5, y + 0.5]; break; }
+  }
+  assert.ok(spot, 'une case dégagée à 4 cases du hall');
+  const reset = () => { Object.assign(m, { x: spot[0], y: spot[1], path: [], goal: null, bored: 0 }); m.setState('wander'); };
+  game.time = CFG.monster.dormant + 1;
+  const frame = db => Buffer.from([0, 0, db + 100, 1, 2, 3]); // numéro, niveau (dB + 100), Opus
+  const tick = () => game.update(1 / 30);
+  const voiceNoises = () => game.noises.filter(n => n.x === a.x && n.y === a.y);
+
+  reset();
+  room.onVoice(a, frame(-40));
+  room.onVoice(b, frame(-5));
+  tick();
+  assert.equal(game.noises.length, 0, 'un murmure, et la voix d’un fantôme : rien');
+  assert.equal(m.state, 'wander');
+
+  reset();
+  room.onVoice(a, frame(CFG.noise.voice.db));
+  tick();
+  assert.equal(voiceNoises().length, 1);
+  assert.equal(voiceNoises()[0].loud, false);
+  assert.equal(m.state, 'investigate', 'une voix normale s’entend à 4 cases');
+  assert.ok(Math.hypot(m.goal.x - a.x, m.goal.y - a.y) < 1, 'elle va voir d’où vient la voix');
+
+  // Entre deux syllabes, le bruit retombe ; une seconde de silence, et plus rien
+  for (let i = 0; i < 30; i++) tick();
+  assert.equal(voiceNoises().length, 0);
+  assert.equal(a.voice, 0);
+
+  room.onVoice(a, frame(-6));
+  tick();
+  assert.ok(voiceNoises()[0].r >= CFG.noise.voice.shout && voiceNoises()[0].loud, 'un cri porte loin, à travers les murs');
+
+  // Hors partie, la voix ne fait aucun bruit dans le manoir
+  room.phase = 'lobby';
+  room.game = null;
+  room.onVoice(a, frame(-6));
 });

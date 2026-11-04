@@ -191,6 +191,7 @@ input:focus { border-color: rgba(196, 21, 42, 0.7); box-shadow: 0 0 0 3px rgba(1
 .players { list-style: none; margin: 0 0 14px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .players li { display: flex; align-items: center; gap: 10px; font-size: 19px; padding: 6px 8px; border-radius: 6px; background: rgba(255, 255, 255, 0.03); }
 .players .dot { width: 14px; height: 14px; border-radius: 50%; flex: none; box-shadow: 0 0 8px currentColor; }
+.players .dot.talk { box-shadow: 0 0 0 3px rgba(125, 255, 154, 0.85), 0 0 14px currentColor; }
 .players .pname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .players .phost { font-size: 13px; color: var(--dim); border: 1px solid var(--line); border-radius: 10px; padding: 0 7px; }
 .players .pstate { font-size: 15px; color: var(--dim); }
@@ -239,6 +240,15 @@ kbd { font-family: inherit; border: 1px solid var(--line); border-bottom-width: 
 .setting .chips { justify-content: center; }
 .setting .chip { font-size: 15px; }
 .quit-btns { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.options { width: min(780px, 100%); max-height: 100%; overflow-y: auto; }
+.option-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 0 32px; }
+.setting select { font: inherit; font-size: 15px; padding: 6px 8px; border-radius: 6px; color: var(--ink); background: #140d12; border: 1px solid var(--line); }
+.meter { position: relative; display: block; height: 6px; margin: 0 8px; border-radius: 3px; overflow: hidden; background: rgba(255, 255, 255, 0.08); }
+#micLevel { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--dim); }
+#micLevel.open { background: var(--green); }
+#micMark { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--red); }
+.mic-info { margin: -6px 0 16px; color: var(--dim); font-size: 14px; line-height: 1.4; }
+.mic-info:empty { display: none; }
 
 .awards { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
 .award { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; font-size: 16px; }
