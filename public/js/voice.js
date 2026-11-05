@@ -78,6 +78,7 @@ export class Voice {
     this.onChange = null; // micro ouvert, fermé ou en erreur (pour les options)
     this.capture = null;
     this.starting = false;
+    this.aec = false; // le micro ouvert (ou en train de s'ouvrir) a l'annulation d'écho
     this.token = 0;
     this.seq = 0;
     this.ts = 0;
@@ -130,10 +131,11 @@ export class Voice {
   }
 
   // Le micro reste ouvert tant qu'on est dans une partie (sauf micro coupé) ou que les options le testent.
+  // Il se rouvre en entrant dans une partie ou en la quittant, avec ou sans annulation d'écho (voir start).
   refresh() {
     const need = this.supported && this.canCapture && this.mode !== 'off' && (this.joined || this.monitoring);
-    if (!need) this.stop();
-    else if (!this.capture && !this.starting && !this.error) this.start();
+    if (!need || ((this.capture || this.starting) && this.aec !== this.joined)) this.stop();
+    if (need && !this.capture && !this.starting && !this.error) this.start();
   }
 
   async devices() {
@@ -151,9 +153,15 @@ export class Voice {
     const token = ++this.token, ctx = this.sound.ctx;
     if (!ctx) return;
     this.starting = true;
+    // L'annulation d'écho seulement dans une partie (salon compris) : dès qu'un micro l'utilise, Chrome fait
+    // passer tout le son de la page par un mélangeur (pour en tirer l'écho à retirer), puis revient en
+    // arrière quand il se ferme, et chaque bascule s'entend comme une saccade dans la musique. Pour le
+    // niveau montré dans les options de l'écran titre, on s'en passe, comme du flux de mesure (qui ne sert
+    // qu'à la voix envoyée).
+    const aec = (this.aec = this.joined);
     let stream = null, meter = null;
     try {
-      const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 };
+      const audio = { echoCancellation: aec, noiseSuppression: true, autoGainControl: true, channelCount: 1 };
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: this.device ? { ...audio, deviceId: { exact: this.device } } : audio });
       } catch (err) {
@@ -164,18 +172,16 @@ export class Voice {
       // rehausse peu à peu une voix basse et baisse une voix forte, la créature s'y tromperait. (Chrome
       // ne traite qu'un flux par micro : le second est sans réglage, ni filtre du bruit ou de l'écho.)
       // Faute de quoi on mesure le son réglé, à peu près juste.
-      try {
+      if (aec) try {
         const id = stream.getAudioTracks()[0]?.getSettings().deviceId;
         const raw = { echoCancellation: false, noiseSuppression: false, autoGainControl: { exact: false }, channelCount: 1 };
         meter = await navigator.mediaDevices.getUserMedia({ audio: id ? { ...raw, deviceId: { exact: id } } : raw });
       } catch (err) {
         console.warn('micro (mesure) :', err);
       }
-      this.worklet ??= ctx.audioWorklet.addModule('js/voice-worklet.js');
-      await this.worklet;
+      await this.sound.worklet(); // déjà chargé avec le son (audio.js), sauf échec
     } catch (err) {
       for (const s of [stream, meter]) s?.getTracks().forEach(t => t.stop());
-      this.worklet = null; // un module qui n'a pas pu se charger sera redemandé
       if (token !== this.token) return;
       this.starting = false;
       this.error = MIC_ERRORS[err?.name] || 'Impossible d’ouvrir le micro.';

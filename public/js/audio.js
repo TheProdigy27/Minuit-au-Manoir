@@ -1,6 +1,7 @@
 // Les sons sont synthétisés en direct (Web Audio), sauf la musique des menus et ceux de SAMPLES.
 const MELODY = [12, 15, 19, 24, 23, 19, 15, 14, 12, 15, 19, 17, 15, 14, 11, 7, 8, 12, 15, 20, 19, 15, 12, 11, 12, null, 7, null, 12, null, null, null];
 const MUSIC_URL = 'audio/menu.mp3';
+const WORKLET_URL = 'js/voice-worklet.js'; // capture du micro (voice.js)
 const SAMPLES = { scream: 'audio/scream.mp3' };
 const MUSIC_VOLUME = 0.7;
 const MUSIC_FADE = 1.5; // secondes
@@ -22,6 +23,9 @@ export class Sound {
     this.track = null;
     this.musicOn = false;
     this.musicStop = null;
+    this.musicData = null;
+    this.trackLoading = false;
+    this.workletLoad = null;
     this.volume = { music: 1, sfx: 1, voice: 1 };
     this.samples = {};
   }
@@ -43,6 +47,9 @@ export class Sound {
     // La musique des menus passe à côté du compresseur et de la réverbération.
     this.musicOut = c.createGain();
     this.musicOut.connect(c.destination);
+    this.trackGain = c.createGain(); // ses fondus
+    this.trackGain.gain.value = 0;
+    this.trackGain.connect(this.musicOut);
     // Le cri du jumpscare aussi, saturé pour passer au-dessus de tout le reste.
     this.scareIn = c.createWaveShaper();
     this.scareIn.curve = this.saturation(SCREAM_DRIVE);
@@ -70,6 +77,18 @@ export class Sound {
       fetch(url).then(r => (r.ok ? r.arrayBuffer() : Promise.reject())).then(b => c.decodeAudioData(b))
         .then(buf => { this.samples[name] = buf; }).catch(() => {});
     }
+    // Le module du chat vocal, chargé d'emblée, avant la musique : quand un premier AudioWorklet arrive dans
+    // un contexte qui joue, Chrome redémarre la sortie audio pour la faire tourner sur son fil (un blanc).
+    this.worklet().catch(() => {});
+  }
+
+  // Charge une fois pour toutes le module AudioWorklet de la capture du micro ; redemandé s'il a échoué.
+  worklet() {
+    this.workletLoad ??= this.ctx.audioWorklet.addModule(WORKLET_URL).catch(err => {
+      this.workletLoad = null;
+      throw err;
+    });
+    return this.workletLoad;
   }
 
   // Volumes du menu Options (0 à 1), mis au carré pour suivre la perception de l'oreille.
@@ -305,29 +324,48 @@ export class Sound {
   }
 
   // --- Musique des menus : audio/menu.mp3 en boucle, avec fondu ---
+  // Décodée en entier et jouée par Web Audio, pas par un élément <audio> : Chrome le fait boucler en
+  // revenant au début, avec un blanc à chaque reprise. Le son décodé (~45 Mo) ne reste que le temps des
+  // menus ; le fichier, lui, se garde pour la fois suivante.
   music(on) {
     if (!this.ctx) return;
     this.musicOn = on;
-    if (!this.track) {
-      if (!on) return;
-      this.track = new Audio();
-      this.track.loop = true;
-      this.trackGain = this.ctx.createGain();
-      this.trackGain.gain.value = 0;
-      this.ctx.createMediaElementSource(this.track).connect(this.trackGain).connect(this.musicOut);
-      // Chargée en entier dans un blob : le protocole app:// ne sait pas servir un média en flux.
-      fetch(MUSIC_URL).then(r => (r.ok ? r.blob() : Promise.reject())).then(b => {
-        this.track.src = URL.createObjectURL(b);
-        if (this.musicOn) this.track.play().catch(() => {});
-      }).catch(() => {});
-    }
     clearTimeout(this.musicStop);
+    if (!this.track) {
+      if (on) this.loadTrack(); // le fondu part avec la musique
+      return;
+    }
+    this.fadeMusic(on ? MUSIC_VOLUME : 0);
+    if (!on) this.musicStop = setTimeout(() => { this.track.stop(); this.track = null; }, MUSIC_FADE * 1000);
+  }
+
+  fadeMusic(v) {
     const g = this.trackGain.gain, t = this.t;
     g.cancelScheduledValues(t);
     g.setValueAtTime(g.value, t);
-    g.linearRampToValueAtTime(on ? MUSIC_VOLUME : 0, t + MUSIC_FADE);
-    if (!on) this.musicStop = setTimeout(() => { this.track.pause(); this.track.currentTime = 0; }, MUSIC_FADE * 1000);
-    else if (this.track.src && this.track.paused) this.track.play().catch(() => {});
+    g.linearRampToValueAtTime(v, t + MUSIC_FADE);
+  }
+
+  loadTrack() {
+    if (this.trackLoading) return;
+    this.trackLoading = true;
+    this.musicData ??= fetch(MUSIC_URL).then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${MUSIC_URL} : ${r.status}`))));
+    const decoded = this.musicData.then(data => this.ctx.decodeAudioData(data.slice(0))); // (il vide ce qu'on lui donne)
+    // la musique attend aussi le module du micro, pour que la sortie redémarre avant (voir init)
+    Promise.all([decoded, this.workletLoad?.catch(() => {})]).then(([buf]) => {
+      if (!this.musicOn || this.track) return;
+      const s = (this.track = this.ctx.createBufferSource()), g = this.trackGain.gain;
+      s.buffer = buf;
+      s.loop = true;
+      s.connect(this.trackGain);
+      g.cancelScheduledValues(this.t);
+      g.setValueAtTime(0, this.t);
+      s.start();
+      this.fadeMusic(MUSIC_VOLUME);
+    }).catch(err => {
+      this.musicData = null;
+      console.warn('musique :', err);
+    }).finally(() => { this.trackLoading = false; });
   }
 
   // --- Boîte à musique du salon ---
