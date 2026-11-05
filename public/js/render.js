@@ -4,6 +4,7 @@ import * as THREE from '/vendor/three.module.min.js';
 import { TILE, CFG, COLORS, batteryFactor } from '/shared/config.js';
 import { tileAt, lineOfSight, floorAt, stairAt, levelDist } from '/shared/physics.js';
 import { mulberry32, levelView, generateMap } from '/shared/map.js';
+import { hideAt, hideDist } from '/shared/hide.js';
 import * as art from './art.js';
 import { surface, shine, meters, setAnisotropy, setCompression, setEnvironment, texturesReady, texturesLoaded, nightEnvironment, photoTextures } from './materials.js';
 import { Post } from './post.js';
@@ -80,6 +81,73 @@ void main() {
   float facing = abs( dot( normalize( vNormal ), normalize( -vPos ) ) );
   gl_FragColor = vec4( color, texture2D( map, vUv ).a * opacity * facing * facing );
 }`;
+
+// Contour des cachettes : un trait fin (en pixels, quelle que soit la distance) le long des arêtes du
+// meuble, un halo qui s'efface sur quelques centimètres et un léger voile sur ses faces. `edge` : distances
+// du point aux bords de sa face, en mètres (voir rimGeometry).
+const RIM_VERT = `
+attribute vec4 edge;
+varying vec4 vEdge;
+void main() {
+  vEdge = edge;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+}`;
+const RIM_FRAG = `
+uniform vec3 color;
+uniform float alpha;
+varying vec4 vEdge;
+void main() {
+  float e = min( min( vEdge.x, vEdge.y ), min( vEdge.z, vEdge.w ) );
+  float px = fwidth( e );
+  float line = 1.0 - smoothstep( 0.6 * px, 1.6 * px + 0.003, e );
+  gl_FragColor = vec4( color * alpha * ( 0.8 * line + 0.3 * exp( -e * 10.0 ) + 0.012 ), 1.0 );
+}`;
+const RIM = new THREE.Color().setRGB(1, 200 / 255, 140 / 255, THREE.SRGBColorSpace); // à la bougie
+const RIM_TAKEN = new THREE.Color().setRGB(140 / 255, 160 / 255, 200 / 255, THREE.SRGBColorSpace); // déjà occupée
+const RIM_H = { wardrobe: 2.12, cabinet: 1.92, bed: 0.66, coffin: 0.52 }; // un peu plus haut que le meuble
+const RIM_NEAR = 5; // distance (m) d'où l'on commence à distinguer une cachette
+
+// Prisme posé au sol autour d'une cachette (contour convexe `pts` [[x, z]…] vu de dessus, hauteur `h`),
+// ses flancs et son dessus. Chaque sommet porte ses distances aux bords de sa face : elles varient
+// linéairement sur la face, donc restent exactes une fois interpolées. Le dessus est un éventail autour
+// du centre : dans chaque part, la distance à son bord (0 sur le bord, l'apothème au centre).
+function rimGeometry(pts, h) {
+  const pos = [], edge = [], FAR = 9;
+  const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length, cz = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+  // un triangle tourné vers `out` (sommets [x, y, z, e0, e1, e2, e3])
+  const tri = (out, a, b, c) => {
+    const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    const n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    for (const p of n[0] * out[0] + n[1] * out[1] + n[2] * out[2] >= 0 ? [a, b, c] : [a, c, b]) {
+      pos.push(p[0], p[1], p[2]);
+      edge.push(p[3], p[4], p[5], p[6]);
+    }
+  };
+  pts.forEach(([ax, az], i) => {
+    const [bx, bz] = pts[(i + 1) % pts.length], len = Math.hypot(bx - ax, bz - az);
+    const out = [(ax + bx) / 2 - cx, 0, (az + bz) / 2 - cz];
+    const A0 = [ax, 0, az, 0, len, 0, h], B0 = [bx, 0, bz, len, 0, 0, h], B1 = [bx, h, bz, len, 0, h, 0], A1 = [ax, h, az, 0, len, h, 0];
+    tri(out, A0, B0, B1);
+    tri(out, A0, B1, A1);
+    const apo = Math.abs((bx - ax) * (cz - az) - (bz - az) * (cx - ax)) / len;
+    tri([0, 1, 0], [ax, h, az, 0, FAR, FAR, FAR], [bx, h, bz, 0, FAR, FAR, FAR], [cx, h, cz, apo, FAR, FAR, FAR]);
+  });
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('edge', new THREE.Float32BufferAttribute(edge, 4));
+  return g;
+}
+
+// Le contour d'une cachette vu de dessus, en coordonnées de son étage (origine `ox`) : celui du meuble
+// dessiné par buildFurniture, élargi de quelques centimètres.
+function rimOutline(s, ox) {
+  const P = 0.025, x0 = s.x - ox + 0.05 - P, z0 = s.y + 0.05 - P, x1 = s.x - ox + s.w - 0.05 + P, z1 = s.y + s.h - 0.05 + P;
+  if (s.k !== 'coffin') return [[x0, z0], [x1, z0], [x1, z1], [x0, z1]];
+  const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, rot = s.w > s.h;
+  const L = Math.max(s.w, s.h) / 2 - 4 / art.TS + P, W = Math.min(s.w, s.h) / 2 - 6 / art.TS + P;
+  return [[-0.6 * W, -L], [0.6 * W, -L], [W, -0.45 * L], [0.7 * W, L], [-0.7 * W, L], [-W, -0.45 * L]]
+    .map(([px, py]) => (rot ? [cx - py, cz + px] : [cx + px, cz + py]));
+}
 
 // teint, cheveux et yeux des joueurs (selon leur numéro)
 const TONES = ['#e3b896', '#c18f69', '#8a5a3c', '#f0cdb2', '#6b4430', '#d9a982', '#a87650', '#ecc3a2'];
@@ -369,6 +437,7 @@ export class Renderer {
     this.hud = new Hud(hudCanvas);
     this.world = null;
     this.owned = [];
+    this.rims = [];
     this.cand = [];
     this.lastT = 0;
     this.ghostView = false;
@@ -635,6 +704,7 @@ export class Renderer {
     this.statics = [];
     const maxTex = this.gl.capabilities.maxTextureSize, budget = 18e6 / map.floors.length;
     this.levels = [];
+    this.rims = [];
     for (let f = 0; f < map.floors.length; f++) {
       const lv = levelView(map, f);
       const group = (this.layer = new THREE.Group()), depth = (this.layerDepth = new THREE.Group());
@@ -655,6 +725,7 @@ export class Renderer {
       this.buildStairs(B, lv);
       if (lv.exit) this.buildExit(B, lv);
       B.build(group, depth);
+      for (const s of map.hides || []) if (floorAt(map, s.x) === f) this.rims.push(this.makeRim(group, s, map.floors[f].ox));
       this.levels.push({ group, depth, plan: art.buildPlan(lv, 1) });
       yield (f + 1) / map.floors.length;
     }
@@ -1548,6 +1619,18 @@ export class Renderer {
     return g;
   }
 
+  // Contour lumineux d'une cachette, éteint jusqu'à ce qu'on s'en approche (updateRims). Construit avec le
+  // manoir, donc compilé par prepare() : il n'arrive jamais de nouveau programme en cours de partie.
+  makeRim(group, s, ox) {
+    const mesh = new THREE.Mesh(rimGeometry(rimOutline(s, ox), RIM_H[s.k] ?? 1), this.own(new THREE.ShaderMaterial({
+      uniforms: { color: { value: RIM.clone() }, alpha: { value: 0 } },
+      vertexShader: RIM_VERT, fragmentShader: RIM_FRAG, transparent: true, depthWrite: false, toneMapped: false, blending: THREE.AdditiveBlending,
+    })));
+    mesh.visible = false;
+    group.add(mesh);
+    return { mesh, s, a: 0 };
+  }
+
   makeViewmodel() {
     const scene = new THREE.Scene();
     const root = new THREE.Group();
@@ -1874,6 +1957,7 @@ export class Renderer {
     this.updateItems(G);
     this.updatePings(G);
     this.updateExit(G, dt);
+    this.updateRims(G, dt, eye);
     this.updateDust(t, lampOn);
 
     const flash = Math.min(1, G.flash);
@@ -2245,6 +2329,31 @@ export class Renderer {
     this.seal.visible = !G.exitOpen;
     this.seal.rotation.z = G.time * 0.3;
     this.seal.material.opacity = 0.55 + 0.2 * Math.sin(G.time * 2);
+  }
+
+  // Cachettes : leur contour s'allume doucement quand on s'en approche, franchement (et palpite) quand on
+  // vise celle où l'on peut se glisser (G.hideTarget) ; bleuté et plus pâle quand quelqu'un s'y cache
+  // déjà. Seulement pour qui peut s'y cacher : vivant·e, debout, pas déjà caché·e ni spectateur.
+  updateRims(G, dt, eye) {
+    const me = G.me, on = me?.state === 'alive' && eye.who === me && !G.hide;
+    const taken = new Set();
+    if (on) for (const p of G.players.values()) if (p !== me && p.hidden && p.state === 'alive') taken.add(hideAt(this.map, p.tx, p.ty)?.id);
+    const T = G.hideTarget, k = Math.min(1, dt * 8), pulse = 0.8 + 0.2 * Math.sin(G.time * 3);
+    for (const r of this.rims) {
+      const full = taken.has(r.s.id);
+      let target = 0;
+      if (on) {
+        const n = Math.min(1, Math.max(0, (RIM_NEAR - hideDist(r.s, eye.x, eye.y)) / (RIM_NEAR - 1.5)));
+        target = (T?.s.id === r.s.id ? pulse : n * n * (3 - 2 * n) * 0.3) * (full ? 0.5 : 1);
+      }
+      r.a += (target - r.a) * k;
+      if (!target && r.a < 0.005) r.a = 0;
+      r.mesh.visible = r.a > 0;
+      if (!r.a) continue;
+      const u = r.mesh.material.uniforms;
+      u.alpha.value = r.a;
+      u.color.value.copy(full ? RIM_TAKEN : RIM);
+    }
   }
 
   // Poussière en suspension, visible seulement dans le faisceau de sa propre lampe.
