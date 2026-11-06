@@ -10,8 +10,11 @@ import { STOREY } from './render.js';
 
 const FRAME = 0.04; // secondes par trame Opus
 const BITRATE = 20000; // bits par seconde : une voix claire en ~100 octets par trame
-const JITTER = 0.08; // retard de lecture au début de chaque phrase
-const MAX_LAG = 0.4; // retard accumulé au-delà duquel on revient au direct
+const JITTER = 0.08; // retard de lecture au début de chaque phrase, quand le réseau est régulier…
+const MAX_JITTER = 0.24; // …qui grandit jusque-là quand la voix d'un joueur arrive par à-coups
+const MIN_LEAD = 0.02; // une trame qui arrive moins de tant avant son tour : le tampon s'est vidé
+const MAX_LAG = 0.3; // retard accumulé (en plus du retard voulu) au-delà duquel on saute des trames
+const FADE = 0.004; // fondu aux coupures (tampon vide, trames perdues ou sautées) : sans lui, un clic
 const HANGOVER = 0.45; // l'activation vocale reste ouverte un instant après la dernière syllabe
 const PREROLL = 2; // trames gardées avant l'ouverture, pour ne pas couper la première syllabe
 const IDLE = 60; // secondes de silence avant de libérer le décodeur d'un joueur
@@ -370,6 +373,7 @@ export class Voice {
 
   speaker(id) {
     const c = this.sound.ctx;
+    const env = c.createGain(); // les fondus aux coupures (voir play)
     const input = c.createGain();
     const filter = c.createBiquadFilter();
     filter.type = 'lowpass';
@@ -378,9 +382,9 @@ export class Voice {
     const panner = new PannerNode(c, { panningModel: 'equalpower', distanceModel: 'linear', rolloffFactor: 0, positionZ: -1 });
     const wet = c.createGain();
     wet.gain.value = 0;
-    input.connect(filter).connect(panner).connect(this.sound.voiceOut);
+    env.connect(input).connect(filter).connect(panner).connect(this.sound.voiceOut);
     filter.connect(wet).connect(this.sound.verb);
-    const s = { input, filter, panner, wet, decoder: null, seq: -1, ts: 0, gap: 0, next: 0, heard: c.currentTime, flat: true, audible: true };
+    const s = { env, input, filter, panner, wet, decoder: null, seq: -1, ts: 0, gap: 0, cut: false, next: 0, fadeAt: 0, delay: JITTER, heard: c.currentTime, flat: true, audible: true };
     this.speakers.set(id, s);
     return s;
   }
@@ -391,15 +395,37 @@ export class Voice {
     const buf = ctx.createBuffer(1, d.numberOfFrames, d.sampleRate);
     d.copyTo(buf.getChannelData(0), { planeIndex: 0, format: 'f32-planar' });
     d.close();
-    const now = ctx.currentTime;
-    s.next += s.gap;
+    const now = ctx.currentTime, g = s.env.gain;
+    let start = s.next + s.gap, cut = s.gap > 0 || s.cut;
     s.gap = 0;
-    if (s.next < now + 0.01 || s.next > now + MAX_LAG) s.next = now + JITTER; // nouvelle phrase, ou trop de retard
+    s.cut = false;
+    if (start < now + MIN_LEAD) {
+      // Tampon vide. Si la voix venait de s'interrompre (elle arrive en retard, pas une nouvelle phrase), on
+      // la retarde un peu plus désormais ; à chaque nouvelle phrase, ce retard revient doucement.
+      if (now - s.next < 0.3) s.delay = Math.min(MAX_JITTER, s.delay + FRAME);
+      else s.delay = Math.max(JITTER, s.delay - FRAME / 2);
+      start = now + s.delay;
+      cut = true;
+    } else if (start > now + s.delay + MAX_LAG) {
+      // Trop de retard accumulé (une rafale après un blocage) : on saute cette trame. Repartir plus tôt
+      // ferait jouer deux bouts de phrase par-dessus ceux déjà programmés.
+      s.cut = true;
+      return;
+    }
+    // Chaque trame finit par un fondu, annulé dès que la suivante arrive à temps pour lui succéder ; après
+    // une coupure, la reprise commence par un fondu. Tout se joue au moins MIN_LEAD à l'avance.
+    if (cut) {
+      g.setValueAtTime(0, start);
+      g.linearRampToValueAtTime(1, start + FADE);
+    } else g.cancelScheduledValues(s.fadeAt);
     const src = ctx.createBufferSource();
     src.buffer = buf;
-    src.connect(s.input);
-    src.start(s.next);
-    s.next += buf.duration;
+    src.connect(s.env);
+    src.start(start);
+    s.next = start + buf.duration;
+    s.fadeAt = s.next - FADE;
+    g.setValueAtTime(1, s.fadeAt);
+    g.linearRampToValueAtTime(0, s.next);
   }
 
   drop(id) {
@@ -408,6 +434,7 @@ export class Voice {
     this.speakers.delete(id);
     s.gone = true;
     if (s.decoder && s.decoder.state !== 'closed') s.decoder.close();
+    s.env.disconnect();
     s.input.disconnect();
     s.filter.disconnect();
     s.panner.disconnect();

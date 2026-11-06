@@ -8,6 +8,9 @@ const MUSIC_FADE = 1.5; // secondes
 const SCREAM_DRIVE = 2.5; // saturation du cri du jumpscare : ~5 dB de plus en volume perçu
 const SCREAM_DUCK = 0.25; // le reste du mix baisse de 12 dB pendant ce cri
 const VOICE_GAIN = 1.3; // voix des autres joueurs (chat vocal), à volume 100 %
+const VOICE_LIMIT = -6; // dB : seuil du limiteur des voix
+const OUT_KNEE = 0.8; // en sortie, le son s'arrondit au-delà (voir softClip)…
+const OUT_RANGE = 4; // …et jusqu'à ce niveau-là (plus haut : 1)
 // Fréquence au-dessus de laquelle les sons du manoir s'étouffent, caché·e dans chaque sorte de meuble
 const MUFFLE = { wardrobe: 1400, cabinet: 1400, coffin: 900, bed: 5000 };
 
@@ -43,10 +46,17 @@ export class Sound {
     this.muffle.type = 'lowpass';
     this.muffle.frequency.value = 20000;
     this.muffle.Q.value = 0.5;
-    this.master.connect(this.muffle).connect(this.duck).connect(comp).connect(c.destination);
+    // Dernier maillon avant les haut-parleurs : ce qui reste sous OUT_KNEE passe tel quel, au-delà le son
+    // s'arrondit vers 1 au lieu d'être écrêté sec par la sortie (un grésillement), quand tout s'additionne.
+    const out = c.createGain();
+    out.gain.value = 1 / OUT_RANGE;
+    const clip = c.createWaveShaper();
+    clip.curve = this.softClip();
+    out.connect(clip).connect(c.destination);
+    this.master.connect(this.muffle).connect(this.duck).connect(comp).connect(out);
     // La musique des menus passe à côté du compresseur et de la réverbération.
     this.musicOut = c.createGain();
-    this.musicOut.connect(c.destination);
+    this.musicOut.connect(out);
     this.trackGain = c.createGain(); // ses fondus
     this.trackGain.gain.value = 0;
     this.trackGain.connect(this.musicOut);
@@ -55,10 +65,23 @@ export class Sound {
     this.scareIn.curve = this.saturation(SCREAM_DRIVE);
     this.scareIn.oversample = '4x';
     this.scareOut = c.createGain();
-    this.scareIn.connect(this.scareOut).connect(c.destination);
-    // Les voix du chat vocal (voice.js) ont leur propre volume, mais baissent aussi pendant le cri.
+    this.scareIn.connect(this.scareOut).connect(out);
+    // Les voix du chat vocal (voice.js) ont leur propre volume, mais baissent aussi pendant le cri. Un
+    // limiteur rabote leurs crêtes : un micro réglé fort, ou quelqu'un qui hausse le ton, dépassait de loin le
+    // maximum après le compresseur du jeu (crêtes à 1,4–1,7 mesurées), et la sortie écrêtait à chaque syllabe.
+    // Chrome remonte toujours le son d'un compresseur (gain de rattrapage) : le gain qui suit le compense, et
+    // une voix normale garde le même volume (mesuré).
     this.voiceOut = c.createGain();
-    this.voiceOut.connect(this.duck);
+    const limit = c.createDynamicsCompressor();
+    limit.threshold.value = VOICE_LIMIT;
+    limit.knee.value = 0;
+    limit.ratio.value = 20;
+    limit.attack.value = 0.001;
+    limit.release.value = 0.1;
+    const makeup = -(VOICE_LIMIT - VOICE_LIMIT / 20) * 0.6; // dB : (1 / gain du limiteur à 0 dB)^0,6
+    const trim = c.createGain();
+    trim.gain.value = 10 ** (-makeup / 20);
+    this.voiceOut.connect(limit).connect(trim).connect(this.duck);
     this.applyVolume();
     this.verb = c.createConvolver();
     this.verb.buffer = this.impulse(3.2, 2.4);
@@ -105,6 +128,18 @@ export class Sound {
   }
 
   get t() { return this.ctx.currentTime; }
+
+  // Courbe de la sortie, pour un son réduit de OUT_RANGE avant elle : droite (le son inchangé) jusqu'à
+  // OUT_KNEE, puis tangente hyperbolique qui tend vers 1 sans cassure. Le WaveShaper interpole entre les
+  // points : sur la partie droite, c'est exact.
+  softClip() {
+    const n = 4097, curve = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = ((i / (n - 1)) * 2 - 1) * OUT_RANGE, a = Math.abs(x);
+      curve[i] = Math.sign(x) * (a <= OUT_KNEE ? a : OUT_KNEE + (1 - OUT_KNEE) * Math.tanh((a - OUT_KNEE) / (1 - OUT_KNEE)));
+    }
+    return curve;
+  }
 
   noiseBuffer(sec) {
     const c = this.ctx, b = c.createBuffer(1, sec * c.sampleRate, c.sampleRate), d = b.getChannelData(0);
